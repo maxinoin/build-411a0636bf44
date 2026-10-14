@@ -1,0 +1,247 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_ui_tests:
+        description: Run the iPhone Simulator UI suite before creating the IPA
+        type: boolean
+        required: false
+        default: false
+      deliver_private_ipa:
+        description: Upload the unsigned IPA to a private release
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: none
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # workflow_dispatch can target another ref; never expose secrets off main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
+
+    steps:
+      - name: Check private-release delivery configuration
+        if: inputs.deliver_private_ipa
+        shell: bash
+        env:
+          TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
+        run: |
+          if [[ "$TOKEN_CONFIGURED" != "true" ]]; then
+            echo "::error title=Private IPA delivery is not configured::Add PRIVATE_IPA_UPLOAD_TOKEN or rerun with deliver_private_ipa disabled."
+            exit 1
+          fi
+
+      - name: Check out private source with a read-only token
+        shell: bash
+        env:
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_TRACE: '0'
+          GIT_TRACE_CURL: '0'
+          GIT_CURL_VERBOSE: '0'
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ -z "$PRIVATE_SOURCE_READ_TOKEN" ]]; then
+            echo "::error title=Checkout configuration invalid::Configure the private source repository and read token."
+            exit 1
+          fi
+          askpass="$RUNNER_TEMP/private-source-askpass"
+          trap 'rm -f "$askpass"' EXIT
+          umask 077
+          cat >"$askpass" <<'ASKPASS'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$PRIVATE_SOURCE_READ_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          ASKPASS
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          if ! git -c credential.helper= clone --quiet --depth 1 --single-branch --branch main \
+            "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$GITHUB_WORKSPACE/private-source" \
+            >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
+            echo "::error title=Private checkout failed::Source checkout failed; private diagnostics were suppressed."
+            exit 1
+          fi
+          git -C "$GITHUB_WORKSPACE/private-source" remote remove origin
+          revision="$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)"
+          echo "::add-mask::$revision"
+          echo "Private source checkout completed."
+
+      - name: Generate Xcode project and resolve pinned packages
+        id: package-resolution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$IOS_PROJECT_DIRECTORY" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
+             [[ "/$IOS_PROJECT_DIRECTORY/" == *"/../"* ]] ||
+             [[ ! "$IOS_SCHEME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error title=Build configuration invalid::Configure the private project directory and scheme secrets."
+            exit 1
+          fi
+          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
+
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            if ! brew install --quiet xcodegen >/dev/null 2>&1; then
+              echo "::error title=Build setup failed::Could not install XcodeGen; installer output was suppressed."
+              exit 1
+            fi
+          fi
+
+          if ! (cd "$source_dir" && xcodegen generate --spec project.yml) \
+            >"$RUNNER_TEMP/xcodegen.log" 2>&1; then
+            echo "::error title=Project generation failed::XcodeGen failed; private project diagnostics were suppressed."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/ios-derived" "$RUNNER_TEMP/ios-source-packages"
+          set +e
+          xcodebuild -resolvePackageDependencies \
+            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
+            -scheme "$IOS_SCHEME" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
+            >"$RUNNER_TEMP/package-resolution.log" 2>&1
+          resolve_status=$?
+          set -e
+
+          if [ "$resolve_status" -ne 0 ]; then
+            echo "::error title=Dependency resolution failed::Swift package resolution failed; private dependency diagnostics were suppressed."
+            exit "$resolve_status"
+          fi
+
+          echo "The app's pinned Swift packages resolved successfully."
+
+      - name: Run optional iOS Simulator UI tests
+        if: inputs.run_ui_tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
+          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime,rows in devices.items() if "iOS" in runtime for device in rows if device["name"].startswith("iPhone")))') || {
+            echo "::error title=Simulator unavailable::No available iPhone Simulator was found."
+            exit 1
+          }
+
+          set +e
+          xcodebuild test \
+            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
+            -scheme "$IOS_SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath "$RUNNER_TEMP/ios-derived" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 180 \
+            -maximum-test-execution-time-allowance 240 \
+            CODE_SIGNING_ALLOWED=NO \
+            >"$RUNNER_TEMP/xcode-test.log" 2>&1
+          test_status=$?
+          set -e
+
+          if [ "$test_status" -ne 0 ]; then
+            echo "::error title=Simulator tests failed::The iOS Simulator tests failed (exit $test_status); private test diagnostics were suppressed."
+            exit "$test_status"
+          fi
+
+          echo "The optional iOS Simulator UI test suite passed."
+
+      - name: Build and package unsigned arm64 IPA
+        shell: bash
+        env:
+          SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
+          SENTRY_ENVIRONMENT: production
+        run: |
+          set -Eeuo pipefail
+          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
+          derived_data="$RUNNER_TEMP/ios-derived"
+          source_revision="$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)"
+          sentry_release="$(printf '%s' "$IOS_SCHEME" | tr '[:upper:]' '[:lower:]')-ios@$source_revision"
+
+          set +e
+          xcodebuild -quiet \
+            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
+            -scheme "$IOS_SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$derived_data" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            SENTRY_DSN="${SENTRY_IOS_DSN:-}" \
+            SENTRY_RELEASE="$sentry_release" \
+            SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build >"$RUNNER_TEMP/xcodebuild.log" 2>&1
+          build_status=$?
+          set -e
+
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error title=iOS build failed::The unsigned iPhone build failed (exit $build_status); private Xcode diagnostics were suppressed."
+            exit "$build_status"
+          fi
+
+          app_path="$derived_data/Build/Products/Release-iphoneos/$IOS_SCHEME.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error title=IPA packaging failed::Xcode completed but the expected app bundle was not found."
+            exit 1
+          fi
+
+          package_path="$RUNNER_TEMP/ios-package"
+          mkdir -p "$package_path/Payload"
+          ditto "$app_path" "$package_path/Payload/$IOS_SCHEME.app"
+          (cd "$package_path" && /usr/bin/zip -qry "$RUNNER_TEMP/app-unsigned.ipa" Payload)
+          echo "The unsigned arm64 iPhone IPA was built on the ephemeral runner."
+
+      - name: Upload IPA to a private release
+        if: inputs.deliver_private_ipa
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+        run: |
+          set -Eeuo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            if ! brew install --quiet gh >/dev/null 2>&1; then
+              echo "::error title=Private upload failed::Could not install GitHub CLI; installer output was suppressed."
+              exit 1
+            fi
+          fi
+
+          # Never deliver an IPA to a public repository, even if the secret is misconfigured.
+          if ! destination_private="$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' \
+            2>"$RUNNER_TEMP/private-visibility-check.log")" || [[ "$destination_private" != "true" ]]; then
+            echo "::error title=Private delivery blocked::The destination could not be verified as private."
+            exit 1
+          fi
+
+          release_tag="ios-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! gh release create "$release_tag" \
+            "$RUNNER_TEMP/app-unsigned.ipa" \
+            --repo "$PRIVATE_SOURCE_REPOSITORY" \
+            --target main \
+            --latest=false \
+            --title "Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --notes "Unsigned iPhone IPA built from private main by the public build broker." \
+            --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
+            echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
+            exit 1
+          fi
+
+          echo "The unsigned IPA is available in a private prerelease in the private source repository."

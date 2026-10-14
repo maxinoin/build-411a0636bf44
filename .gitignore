@@ -1,0 +1,18 @@
+# Never commit build products or signing material to this public broker.
+*.ipa
+*.xcarchive/
+*.dSYM/
+DerivedData/
+.DS_Store
+.env
+.env.*
+*.p12
+*.mobileprovision
+AuthKey_*.p8
+*.pem
+*.key
+private-source/
+*.log
+*.xcresult/
+SourcePackages/
+*-private-setup/
