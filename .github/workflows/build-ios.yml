@@ -7,7 +7,7 @@ on:
         description: Run the iPhone Simulator UI suite before creating the IPA
         type: boolean
         required: false
-        default: false
+        default: true
       deliver_private_ipa:
         description: Upload the unsigned IPA to a private release
         type: boolean
@@ -125,7 +125,7 @@ jobs:
 
           echo "The app's pinned Swift packages resolved successfully."
 
-      - name: Run optional iOS Simulator UI tests
+      - name: Run iOS Simulator UI tests
         if: inputs.run_ui_tests
         shell: bash
         run: |
