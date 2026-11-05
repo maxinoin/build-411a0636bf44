@@ -3,6 +3,10 @@ name: Build iOS
 on:
   workflow_dispatch:
     inputs:
+      private_source_sha:
+        description: Exact commit to build from the configured private repository (defaults to main)
+        type: string
+        required: false
       run_ui_tests:
         description: Run the iPhone Simulator UI suite before creating the IPA
         type: boolean
@@ -44,8 +48,10 @@ jobs:
           fi
 
       - name: Check out private source with a read-only token
+        id: private-source
         shell: bash
         env:
+          REQUESTED_REVISION: ${{ inputs.private_source_sha }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
           GIT_TERMINAL_PROMPT: '0'
@@ -71,14 +77,29 @@ jobs:
           ASKPASS
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass"
-          if ! git -c credential.helper= clone --quiet --depth 1 --single-branch --branch main \
-            "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$GITHUB_WORKSPACE/private-source" \
-            >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
+          source="$GITHUB_WORKSPACE/private-source"
+          if [[ -z "$REQUESTED_REVISION" ]]; then
+            revision_ref=refs/heads/main
+          elif [[ "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            revision_ref="$REQUESTED_REVISION"
+          else
+            echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
+            exit 1
+          fi
+          if ! (
+            git init --quiet "$source"
+            git -C "$source" -c credential.helper= fetch --quiet --depth 1 \
+              "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$revision_ref"
+            git -C "$source" checkout --quiet --detach FETCH_HEAD
+          ) >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
             echo "::error title=Private checkout failed::Source checkout failed; private diagnostics were suppressed."
             exit 1
           fi
-          git -C "$GITHUB_WORKSPACE/private-source" remote remove origin
-          revision="$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)"
+          revision="$(git -C "$source" rev-parse HEAD)"
+          if [[ -n "$REQUESTED_REVISION" && "$revision" != "$REQUESTED_REVISION" ]]; then
+            echo "::error title=Private revision mismatch::The checked out commit did not match the requested commit."
+            exit 1
+          fi
           echo "::add-mask::$revision"
           echo "Private source checkout completed."
 
@@ -244,7 +265,7 @@ jobs:
           release_tag="ios-build-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           if ! gh release create "$release_tag" "$diagnostics" \
             --repo "$PRIVATE_SOURCE_REPOSITORY" \
-            --target main \
+            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
             --latest=false \
             --title "Private iOS build diagnostics ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --notes "Filtered compiler error lines from the private iOS build. Full source and build logs were not uploaded." \
@@ -279,10 +300,10 @@ jobs:
           if ! gh release create "$release_tag" \
             "$RUNNER_TEMP/app-unsigned.ipa" \
             --repo "$PRIVATE_SOURCE_REPOSITORY" \
-            --target main \
+            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
             --latest=false \
             --title "Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --notes "Unsigned iPhone IPA built from private main by the public build broker." \
+            --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker." \
             --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
             echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
             exit 1
