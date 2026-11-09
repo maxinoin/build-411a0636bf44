@@ -147,7 +147,9 @@ jobs:
           echo "The app's pinned Swift packages resolved successfully."
 
       - name: Run iOS Simulator UI tests
+        id: simulator-tests
         if: inputs.run_ui_tests
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -232,7 +234,7 @@ jobs:
           echo "The unsigned arm64 iPhone IPA was built on the ephemeral runner."
 
       - name: Upload filtered build diagnostics privately
-        if: failure() && inputs.deliver_private_ipa
+        if: (failure() || steps.simulator-tests.outcome == 'failure') && inputs.deliver_private_ipa
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
@@ -285,7 +287,7 @@ jobs:
             --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
             --latest=false \
             --title "Private iOS build diagnostics ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --notes "Filtered compiler error lines from the private iOS build. Full source and build logs were not uploaded." \
+            --notes "Filtered compiler and XCTest failure details from the private iOS build. Full source and test logs were not uploaded." \
             --prerelease >"$RUNNER_TEMP/private-diagnostics-upload.log" 2>&1; then
             echo "::error title=Private diagnostics upload failed::Could not upload filtered diagnostics."
             exit 1
@@ -297,6 +299,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          SIMULATOR_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
         run: |
           set -Eeuo pipefail
           if ! command -v gh >/dev/null 2>&1; then
@@ -320,10 +323,17 @@ jobs:
             --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
             --latest=false \
             --title "Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker." \
+            --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Simulator UI test outcome: ${SIMULATOR_TEST_RESULT:-skipped}." \
             --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
             echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
             exit 1
           fi
 
           echo "The unsigned IPA is available in a private prerelease in the private source repository."
+
+      - name: Report simulator test failure after private delivery
+        if: always() && steps.simulator-tests.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::error title=Simulator tests failed::Filtered results and the unsigned IPA were delivered privately for review."
+          exit 1
