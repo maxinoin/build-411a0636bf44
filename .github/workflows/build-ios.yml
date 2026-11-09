@@ -165,6 +165,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$simulator_id" \
             -derivedDataPath "$RUNNER_TEMP/ios-derived" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
+            -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
             -parallel-testing-enabled NO \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 180 \
@@ -249,7 +250,23 @@ jobs:
           lines = source.read_text(errors="replace").splitlines() if source.exists() else []
           pattern = re.compile(r"(?:\.swift:\d+:\d+:\s+error:|(?:^|\s)error:|\*\* BUILD FAILED \*\*)")
           selected = [re.sub(r"^.*?/private-source/", "private-source/", line) for line in lines if pattern.search(line)]
-          output.write_text("\n".join(selected or ["No compiler diagnostic lines matched; full logs stayed on the ephemeral runner."]) + "\n")
+          test_log = pathlib.Path(str(source).replace("xcodebuild.log", "xcode-test.log"))
+          test_lines = test_log.read_text(errors="replace").splitlines() if test_log.exists() else []
+          test_pattern = re.compile(
+              r"(?:Test Case .*\bfailed\b|Test Suite .*\bfailed\b|"
+              r"Failing tests:|Executed \d+ tests?|Testing failed|"
+              r"XCTAssert\w* failed|Assertion Failure|error:.*(?:XCTAssert|test case))",
+              re.IGNORECASE,
+          )
+          test_details = [
+              re.sub(r"^.*?/private-source/", "private-source/", line)[:800]
+              for line in test_lines if test_pattern.search(line)
+          ]
+          report = selected or ["No compiler diagnostic lines matched; full build logs stayed on the ephemeral runner."]
+          report.append("")
+          report.append("UI test failure summary:")
+          report.extend(test_details[:80] or ["No filtered XCTest failure lines matched; full test logs stayed on the ephemeral runner."])
+          output.write_text("\n".join(report) + "\n")
           PY
 
           if ! command -v gh >/dev/null 2>&1; then
