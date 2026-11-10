@@ -35,7 +35,7 @@ jobs:
     # workflow_dispatch can target another ref; never expose secrets off main.
     if: github.ref == 'refs/heads/main'
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 55
     env:
       IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
       IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
@@ -168,8 +168,12 @@ jobs:
 
           set +e
           test_filter=()
+          test_allowance=180
+          test_maximum=240
           if [[ "$VISUAL_AUDIT" == "true" ]]; then
             test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+            test_allowance=600
+            test_maximum=600
           fi
           xcodebuild test "${test_filter[@]}" \
             -project "$source_dir/$IOS_SCHEME.xcodeproj" \
@@ -181,8 +185,8 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
             -parallel-testing-enabled NO \
             -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 180 \
-            -maximum-test-execution-time-allowance 240 \
+            -default-test-execution-time-allowance "$test_allowance" \
+            -maximum-test-execution-time-allowance "$test_maximum" \
             CODE_SIGNING_ALLOWED=NO \
             >"$RUNNER_TEMP/xcode-test.log" 2>&1
           test_status=$?
@@ -402,6 +406,11 @@ jobs:
           if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
             ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ios-ui-tests.xcresult" "$RUNNER_TEMP/sheet-visual-results.zip"
             files+=("$RUNNER_TEMP/sheet-visual-results.zip")
+            mkdir -p "$RUNNER_TEMP/sheet-attachments"
+            if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-ui-tests.xcresult" --output-path "$RUNNER_TEMP/sheet-attachments" >"$RUNNER_TEMP/sheet-export.log" 2>&1; then
+              ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/sheet-attachments" "$RUNNER_TEMP/sheet-screenshots.zip"
+              files+=("$RUNNER_TEMP/sheet-screenshots.zip")
+            fi
           fi
           gh release create "ios-visual-audit-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${files[@]}" \
             --repo "$PRIVATE_SOURCE_REPOSITORY" \
