@@ -27,6 +27,11 @@ on:
         type: boolean
         required: false
         default: false
+      visual_bus_only:
+        description: Limit the visual audit to bus sheet states
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: none
@@ -164,6 +169,7 @@ jobs:
         env:
           VISUAL_AUDIT: ${{ inputs.visual_audit }}
           VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
+          VISUAL_BUS_ONLY: ${{ inputs.visual_bus_only }}
         run: |
           set -Eeuo pipefail
           source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
@@ -180,6 +186,9 @@ jobs:
             test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
             if [[ "$VISUAL_OTHER_SHEETS_ONLY" == "true" ]]; then
               test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
+            fi
+            if [[ "$VISUAL_BUS_ONLY" == "true" ]]; then
+              test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInLightMode)
             fi
             test_allowance=600
             test_maximum=600
