@@ -22,6 +22,11 @@ on:
         type: boolean
         required: false
         default: false
+      visual_other_sheets_only:
+        description: Limit the visual audit to bus, picker, settings and trip planner
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: none
@@ -158,6 +163,7 @@ jobs:
         shell: bash
         env:
           VISUAL_AUDIT: ${{ inputs.visual_audit }}
+          VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
         run: |
           set -Eeuo pipefail
           source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
@@ -172,6 +178,9 @@ jobs:
           test_maximum=240
           if [[ "$VISUAL_AUDIT" == "true" ]]; then
             test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+            if [[ "$VISUAL_OTHER_SHEETS_ONLY" == "true" ]]; then
+              test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
+            fi
             test_allowance=600
             test_maximum=600
           fi
