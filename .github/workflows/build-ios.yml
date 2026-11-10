@@ -218,7 +218,7 @@ jobs:
           echo "The optional iOS Simulator UI test suite passed."
 
       - name: Build and package unsigned arm64 IPA
-        if: '!inputs.visual_audit'
+        if: '!inputs.visual_audit || inputs.deliver_private_ipa'
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
@@ -371,7 +371,7 @@ jobs:
           fi
           echo "Filtered build diagnostics uploaded to a private prerelease."
       - name: Upload IPA to a private release
-        if: inputs.deliver_private_ipa && !inputs.visual_audit
+        if: inputs.deliver_private_ipa
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
