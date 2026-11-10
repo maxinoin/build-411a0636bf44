@@ -17,6 +17,11 @@ on:
         type: boolean
         required: false
         default: true
+      visual_audit:
+        description: Run targeted sheet-state tests and privately deliver the simulator result bundle
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: none
@@ -37,7 +42,7 @@ jobs:
 
     steps:
       - name: Check private-release delivery configuration
-        if: inputs.deliver_private_ipa
+        if: inputs.deliver_private_ipa || inputs.visual_audit
         shell: bash
         env:
           TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
@@ -148,9 +153,11 @@ jobs:
 
       - name: Run iOS Simulator UI tests
         id: simulator-tests
-        if: inputs.run_ui_tests
+        if: inputs.run_ui_tests || inputs.visual_audit
         continue-on-error: true
         shell: bash
+        env:
+          VISUAL_AUDIT: ${{ inputs.visual_audit }}
         run: |
           set -Eeuo pipefail
           source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
@@ -160,7 +167,11 @@ jobs:
           }
 
           set +e
-          xcodebuild test \
+          test_filter=()
+          if [[ "$VISUAL_AUDIT" == "true" ]]; then
+            test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+          fi
+          xcodebuild test "${test_filter[@]}" \
             -project "$source_dir/$IOS_SCHEME.xcodeproj" \
             -scheme "$IOS_SCHEME" \
             -configuration Debug \
@@ -185,6 +196,7 @@ jobs:
           echo "The optional iOS Simulator UI test suite passed."
 
       - name: Build and package unsigned arm64 IPA
+        if: '!inputs.visual_audit'
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
@@ -234,7 +246,7 @@ jobs:
           echo "The unsigned arm64 iPhone IPA was built on the ephemeral runner."
 
       - name: Upload filtered build diagnostics privately
-        if: (failure() || steps.simulator-tests.outcome == 'failure') && inputs.deliver_private_ipa
+        if: (failure() || steps.simulator-tests.outcome == 'failure') && inputs.deliver_private_ipa && !inputs.visual_audit
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
@@ -337,7 +349,7 @@ jobs:
           fi
           echo "Filtered build diagnostics uploaded to a private prerelease."
       - name: Upload IPA to a private release
-        if: inputs.deliver_private_ipa
+        if: inputs.deliver_private_ipa && !inputs.visual_audit
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
@@ -373,6 +385,31 @@ jobs:
           fi
 
           echo "The unsigned IPA is available in a private prerelease in the private source repository."
+
+      - name: Upload visual audit privately
+        if: always() && inputs.visual_audit && steps.simulator-tests.outcome != 'skipped'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' 2>/dev/null)" != "true" ]]; then
+            echo "::error title=Private delivery blocked::The destination could not be verified as private."
+            exit 1
+          fi
+          files=("$RUNNER_TEMP/xcode-test.log")
+          if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
+            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ios-ui-tests.xcresult" "$RUNNER_TEMP/sheet-visual-results.zip"
+            files+=("$RUNNER_TEMP/sheet-visual-results.zip")
+          fi
+          gh release create "ios-visual-audit-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${files[@]}" \
+            --repo "$PRIVATE_SOURCE_REPOSITORY" \
+            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
+            --latest=false --prerelease --title "Private simulator visual audit" \
+            --notes "Private simulator screenshots and test diagnostics." \
+            >"$RUNNER_TEMP/private-visual-upload.log" 2>&1
+          echo "Simulator results uploaded privately."
 
       - name: Report simulator test failure after private delivery
         if: always() && steps.simulator-tests.outcome == 'failure'
