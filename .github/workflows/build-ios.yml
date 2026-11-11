@@ -179,21 +179,21 @@ jobs:
           }
 
           set +e
-          test_filter=()
+          xcodebuild_test_args=(test)
           test_allowance=180
           test_maximum=240
           if [[ "$VISUAL_AUDIT" == "true" ]]; then
-            test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+            xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
             if [[ "$VISUAL_OTHER_SHEETS_ONLY" == "true" ]]; then
-              test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
+              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
             fi
             if [[ "$VISUAL_BUS_ONLY" == "true" ]]; then
-              test_filter=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInLightMode)
+              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInLightMode)
             fi
             test_allowance=600
             test_maximum=600
           fi
-          xcodebuild test "${test_filter[@]}" \
+          xcodebuild "${xcodebuild_test_args[@]}" \
             -project "$source_dir/$IOS_SCHEME.xcodeproj" \
             -scheme "$IOS_SCHEME" \
             -configuration Debug \
