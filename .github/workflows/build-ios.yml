@@ -98,6 +98,17 @@ jobs:
           repositories: KnightRoute
           permission-contents: read
 
+      - name: Mint short-lived private source write token
+        id: upload_app_token
+        if: steps.auth.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: write
+
       - name: Resolve queue revision and skip already processed commits
         id: resolve
         shell: bash
@@ -106,6 +117,7 @@ jobs:
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           AUTH_MODE: ${{ steps.auth.outputs.auth_mode }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          PRIVATE_SOURCE_WRITE_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -Eeuo pipefail
@@ -140,7 +152,46 @@ jobs:
               "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/ref/tags/$marker")"
             case "$marker_status" in
               200) should_build=false ;;
-              404) should_build=true ;;
+              404)
+                marker_list="$(curl --silent --show-error --fail \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $PRIVATE_SOURCE_READ_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/matching-refs/tags/knightroute-ipa-processed-")"
+                marker_count="$(jq -er 'length' <<< "$marker_list")"
+                if [[ "$marker_count" == "0" ]]; then
+                  # Do not build whatever happened to be in the queue when
+                  # automation was first enabled. A later completed queue push
+                  # is the first automatic release candidate.
+                  payload="$(jq -cn --arg ref "refs/tags/$marker" --arg sha "$revision" '{ref:$ref,sha:$sha}')"
+                  create_code="$(curl --silent --show-error -o "$RUNNER_TEMP/queue-baseline-create.json" -w '%{http_code}' \
+                    -X POST \
+                    -H "Accept: application/vnd.github+json" \
+                    -H "Authorization: Bearer $PRIVATE_SOURCE_WRITE_TOKEN" \
+                    -H "X-GitHub-Api-Version: 2022-11-28" \
+                    -H 'Content-Type: application/json' \
+                    --data "$payload" \
+                    "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/refs")"
+                  if [[ "$create_code" == "201" || "$create_code" == "422" ]]; then
+                    existing_sha="$(curl --silent --show-error --fail \
+                      -H "Accept: application/vnd.github+json" \
+                      -H "Authorization: Bearer $PRIVATE_SOURCE_READ_TOKEN" \
+                      -H "X-GitHub-Api-Version: 2022-11-28" \
+                      "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/ref/tags/$marker" | jq -er '.object.sha')"
+                    if [[ "$existing_sha" != "$revision" ]]; then
+                      echo "::error title=Queue baseline conflict::Could not safely mark the initial queue revision."
+                      exit 1
+                    fi
+                    should_build=false
+                    echo "The first scheduled check established a baseline; a later queue push will trigger the first automatic IPA."
+                  else
+                    echo "::error title=Queue baseline update failed::Could not safely initialize the IPA queue."
+                    exit 1
+                  fi
+                else
+                  should_build=true
+                fi
+                ;;
               *) echo "::error title=Queue state check failed::Could not safely check whether this IPA revision was already processed."; exit 1 ;;
             esac
           fi
