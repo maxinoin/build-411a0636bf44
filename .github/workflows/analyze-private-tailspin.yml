@@ -52,7 +52,7 @@ jobs:
           REQUESTED_REVISION: ${{ inputs.private_source_sha }}
           REQUESTED_REF: ${{ inputs.private_source_ref }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
           GIT_TERMINAL_PROMPT: '0'
           GIT_TRACE: '0'
           GIT_TRACE_CURL: '0'
