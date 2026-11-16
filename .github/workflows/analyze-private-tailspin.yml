@@ -32,19 +32,59 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Validate private source configuration
+        id: auth
         shell: bash
         env:
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY != '' }}
           SOURCE_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN != '' }}
           UPLOAD_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
         run: |
           set -euo pipefail
-          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
-             [[ "$SOURCE_TOKEN_CONFIGURED" != "true" ]] ||
-             [[ "$UPLOAD_TOKEN_CONFIGURED" != "true" ]]; then
-            echo "::error title=Private diagnostic configuration invalid::The private source or upload credentials are not configured."
+          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error title=Private source configuration invalid::The private source repository is not configured."
             exit 1
           fi
+          if [[ -n "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" == "true" ]]; then
+            if [[ -z "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" != "true" ]]; then
+              echo "::error title=GitHub App configuration incomplete::Set both PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID and PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY."
+              exit 1
+            fi
+            if [[ "$PRIVATE_SOURCE_REPOSITORY" != "maxinoin/KnightRoute" ]]; then
+              echo "::error title=GitHub App repository mismatch::The App token is scoped to maxinoin/KnightRoute; update the workflow if the private source repository changes."
+              exit 1
+            fi
+            echo "auth_mode=app" >> "$GITHUB_OUTPUT"
+          elif [[ "$SOURCE_TOKEN_CONFIGURED" == "true" && "$UPLOAD_TOKEN_CONFIGURED" == "true" ]]; then
+            echo "auth_mode=pat" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Legacy token fallback::Using the configured PATs. Configure the GitHub App variable and secret to switch to short-lived tokens."
+          else
+            echo "::error title=Private diagnostic configuration invalid::Configure the GitHub App credentials or both existing PAT secrets."
+            exit 1
+          fi
+
+      - name: Mint read-only GitHub App token
+        id: source_app_token
+        if: steps.auth.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: read
+
+      - name: Mint write-scoped GitHub App token
+        id: upload_app_token
+        if: steps.auth.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: write
 
       - name: Fetch exact private source revision
         shell: bash
@@ -52,7 +92,7 @@ jobs:
           REQUESTED_REVISION: ${{ inputs.private_source_sha }}
           REQUESTED_REF: ${{ inputs.private_source_ref }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
           GIT_TERMINAL_PROMPT: '0'
           GIT_TRACE: '0'
           GIT_TRACE_CURL: '0'
@@ -136,7 +176,7 @@ jobs:
       - name: Upload report to private source repository
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          GH_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
         run: |
           set -Eeuo pipefail
