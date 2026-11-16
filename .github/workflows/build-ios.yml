@@ -328,7 +328,7 @@ jobs:
           echo "The optional iOS Simulator UI test suite passed."
 
       - name: Build and package unsigned arm64 IPA
-        if: '!inputs.visual_audit || env.DELIVER_PRIVATE_IPA == "true"'
+        if: ${{ !inputs.visual_audit || env.DELIVER_PRIVATE_IPA == 'true' }}
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
