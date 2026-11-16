@@ -88,7 +88,16 @@ jobs:
               "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "refs/heads/$REQUESTED_REF"
             git -C "$source" checkout --quiet --detach FETCH_HEAD
           ) >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
-            echo "::error title=Private checkout failed::Private source checkout failed; credentials and checkout diagnostics were suppressed."
+            python3 - "$RUNNER_TEMP/private-checkout.log" "$PRIVATE_SOURCE_REPOSITORY" "$REQUESTED_REF" <<'PY'
+          import pathlib, re, sys
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          lines = [line for line in text.splitlines() if line.startswith(("fatal:", "remote:", "error:"))]
+          for line in lines[-4:]:
+              line = line.replace(sys.argv[2], "[private repository]").replace(sys.argv[3], "[private ref]")
+              line = re.sub(r"https://github[^ ]+", "[private GitHub URL]", line)
+              print(line[:500])
+          PY
+            echo "::error title=Private checkout failed::Private source checkout failed; credentials were suppressed."
             exit 1
           fi
           revision="$(git -C "$source" rev-parse HEAD)"
