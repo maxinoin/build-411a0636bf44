@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       private_source_sha:
-        description: Exact commit to build from the configured private repository (defaults to main)
+        description: Exact commit to build from the configured private repository (defaults to codex/ipa-queue)
         type: string
         required: false
       run_ui_tests:
@@ -32,43 +32,181 @@ on:
         type: boolean
         required: false
         default: false
+  schedule:
+    # The broker polls the private integration branch so it can use its
+    # installed GitHub App credentials without a cross-repository PAT.
+    - cron: '7,22,37,52 * * * *'
 
 permissions:
   contents: none
 
 concurrency:
   group: ios-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  resolve_queue:
+    name: Check for a new queued IPA revision
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.resolve.outputs.revision }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      auth_mode: ${{ steps.auth.outputs.auth_mode }}
+    steps:
+      - name: Validate private source authentication
+        id: auth
+        shell: bash
+        env:
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY != '' }}
+          SOURCE_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN != '' }}
+          UPLOAD_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error title=Private source configuration invalid::The private source repository is not configured."
+            exit 1
+          fi
+          if [[ -n "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" == "true" ]]; then
+            if [[ -z "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" != "true" ]]; then
+              echo "::error title=GitHub App configuration incomplete::Set both PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID and PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY."
+              exit 1
+            fi
+            if [[ "$PRIVATE_SOURCE_REPOSITORY" != "maxinoin/KnightRoute" ]]; then
+              echo "::error title=GitHub App repository mismatch::The App token is scoped to maxinoin/KnightRoute."
+              exit 1
+            fi
+            echo "auth_mode=app" >> "$GITHUB_OUTPUT"
+          elif [[ "$SOURCE_TOKEN_CONFIGURED" == "true" && "$UPLOAD_TOKEN_CONFIGURED" == "true" ]]; then
+            echo "auth_mode=pat" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Legacy token fallback::Using PAT secrets. Configure the GitHub App credentials to avoid expiring tokens."
+          else
+            echo "::error title=Private source authentication missing::Configure the GitHub App credentials or both fallback PAT secrets."
+            exit 1
+          fi
+
+      - name: Mint short-lived private source token
+        id: source_app_token
+        if: steps.auth.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: read
+
+      - name: Resolve queue revision and skip already processed commits
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED_REVISION: ${{ inputs.private_source_sha }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          AUTH_MODE: ${{ steps.auth.outputs.auth_mode }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$REQUESTED_REVISION" ]]; then
+            if [[ ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
+              exit 1
+            fi
+            revision="$REQUESTED_REVISION"
+          else
+            response="$(curl --silent --show-error --fail \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $PRIVATE_SOURCE_READ_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --get --data-urlencode 'sha=codex/ipa-queue' --data-urlencode 'per_page=1' \
+              "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/commits")"
+            revision="$(jq -er '.[0].sha' <<< "$response")"
+            if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error title=Queue revision unavailable::The private IPA queue branch has no valid commit."
+              exit 1
+            fi
+          fi
+
+          should_build=true
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            marker="knightroute-ipa-processed-$revision"
+            marker_status="$(curl --silent --show-error \
+              -o "$RUNNER_TEMP/queue-marker.json" -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $PRIVATE_SOURCE_READ_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/ref/tags/$marker")"
+            case "$marker_status" in
+              200) should_build=false ;;
+              404) should_build=true ;;
+              *) echo "::error title=Queue state check failed::Could not safely check whether this IPA revision was already processed."; exit 1 ;;
+            esac
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          if [[ "$should_build" == "false" ]]; then
+            echo "The current IPA queue revision was already attempted; no paid Mac runner will start."
+          else
+            echo "A new IPA queue revision is ready for the Mac build."
+          fi
+
   build:
     # workflow_dispatch can target another ref; never expose secrets off main.
-    if: github.ref == 'refs/heads/main'
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true'
     runs-on: macos-26
     timeout-minutes: 55
     env:
       IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
       IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
+      RUN_UI_TESTS: ${{ github.event_name == 'schedule' || inputs.run_ui_tests || inputs.visual_audit }}
+      DELIVER_PRIVATE_IPA: ${{ github.event_name == 'schedule' || inputs.deliver_private_ipa }}
 
     steps:
       - name: Check private-release delivery configuration
-        if: inputs.deliver_private_ipa || inputs.visual_audit
+        if: env.DELIVER_PRIVATE_IPA == 'true' || inputs.visual_audit
         shell: bash
         env:
+          APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY != '' }}
           TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
         run: |
-          if [[ "$TOKEN_CONFIGURED" != "true" ]]; then
-            echo "::error title=Private IPA delivery is not configured::Add PRIVATE_IPA_UPLOAD_TOKEN or rerun with deliver_private_ipa disabled."
+          if [[ -z "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" != "true" ]] && [[ "$TOKEN_CONFIGURED" != "true" ]]; then
+            echo "::error title=Private IPA delivery is not configured::Configure the GitHub App credentials or PRIVATE_IPA_UPLOAD_TOKEN."
             exit 1
           fi
+
+      - name: Mint short-lived private source read token
+        id: source_app_token
+        if: needs.resolve_queue.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: read
+
+      - name: Mint short-lived private source write token
+        id: upload_app_token
+        if: needs.resolve_queue.outputs.auth_mode == 'app'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          client-id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+          owner: maxinoin
+          repositories: KnightRoute
+          permission-contents: write
 
       - name: Check out private source with a read-only token
         id: private-source
         shell: bash
         env:
-          REQUESTED_REVISION: ${{ inputs.private_source_sha }}
+          REQUESTED_REVISION: ${{ needs.resolve_queue.outputs.revision }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
           GIT_TERMINAL_PROMPT: '0'
           GIT_TRACE: '0'
           GIT_TRACE_CURL: '0'
@@ -93,12 +231,10 @@ jobs:
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass"
           source="$GITHUB_WORKSPACE/private-source"
-          if [[ -z "$REQUESTED_REVISION" ]]; then
-            revision_ref=refs/heads/main
-          elif [[ "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+          if [[ "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
             revision_ref="$REQUESTED_REVISION"
           else
-            echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
+            echo "::error title=Invalid private revision::The resolved private revision is not a full lowercase commit SHA."
             exit 1
           fi
           if ! (
@@ -163,7 +299,7 @@ jobs:
 
       - name: Run iOS Simulator UI tests
         id: simulator-tests
-        if: inputs.run_ui_tests || inputs.visual_audit
+        if: env.RUN_UI_TESTS == 'true'
         continue-on-error: true
         shell: bash
         env:
@@ -218,7 +354,7 @@ jobs:
           echo "The optional iOS Simulator UI test suite passed."
 
       - name: Build and package unsigned arm64 IPA
-        if: '!inputs.visual_audit || inputs.deliver_private_ipa'
+        if: '!inputs.visual_audit || env.DELIVER_PRIVATE_IPA == "true"'
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
@@ -268,10 +404,10 @@ jobs:
           echo "The unsigned arm64 iPhone IPA was built on the ephemeral runner."
 
       - name: Upload filtered build diagnostics privately
-        if: (failure() || steps.simulator-tests.outcome == 'failure') && inputs.deliver_private_ipa && !inputs.visual_audit
+        if: (failure() || steps.simulator-tests.outcome == 'failure') && env.DELIVER_PRIVATE_IPA == 'true' && !inputs.visual_audit
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           XCRESULT_BUNDLE: ${{ runner.temp }}/ios-ui-tests.xcresult
         run: |
@@ -371,10 +507,11 @@ jobs:
           fi
           echo "Filtered build diagnostics uploaded to a private prerelease."
       - name: Upload IPA to a private release
-        if: inputs.deliver_private_ipa
+        id: private-release
+        if: env.DELIVER_PRIVATE_IPA == 'true'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           SIMULATOR_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
         run: |
@@ -412,7 +549,7 @@ jobs:
         if: always() && inputs.visual_audit && steps.simulator-tests.outcome != 'skipped'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
         run: |
           set -Eeuo pipefail
@@ -444,3 +581,40 @@ jobs:
         run: |
           echo "::error title=Simulator tests failed::Filtered results and the unsigned IPA were delivered privately for review."
           exit 1
+
+      - name: Mark queued revision as attempted
+        if: always() && !cancelled() && steps.private-source.outcome == 'success' && env.DELIVER_PRIVATE_IPA == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          PRIVATE_REVISION: ${{ needs.resolve_queue.outputs.revision }}
+        run: |
+          set -Eeuo pipefail
+          marker="knightroute-ipa-processed-$PRIVATE_REVISION"
+          payload="$(jq -cn --arg ref "refs/tags/$marker" --arg sha "$PRIVATE_REVISION" '{ref:$ref,sha:$sha}')"
+          response_code="$(curl --silent --show-error -o "$RUNNER_TEMP/queue-marker-create.json" -w '%{http_code}' \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/refs")"
+          if [[ "$response_code" == "201" ]]; then
+            echo "Queue attempt recorded. The scheduled watcher will not repeatedly spend Mac minutes on this revision."
+          elif [[ "$response_code" == "422" ]]; then
+            existing_sha="$(curl --silent --show-error --fail \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/git/ref/tags/$marker" | jq -er '.object.sha')"
+            if [[ "$existing_sha" != "$PRIVATE_REVISION" ]]; then
+              echo "::error title=Queue marker conflict::A marker exists for a different source revision."
+              exit 1
+            fi
+            echo "Queue attempt marker already exists."
+          else
+            echo "::error title=Queue marker update failed::Could not record this revision's build attempt."
+            exit 1
+          fi
