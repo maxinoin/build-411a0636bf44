@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       private_source_sha:
-        description: Exact commit in the configured private source repository
+        description: Exact expected commit in the configured private source repository
+        type: string
+        required: true
+      private_source_ref:
+        description: Branch containing the requested private commit
         type: string
         required: true
       tailspin_path:
@@ -46,6 +50,7 @@ jobs:
         shell: bash
         env:
           REQUESTED_REVISION: ${{ inputs.private_source_sha }}
+          REQUESTED_REF: ${{ inputs.private_source_ref }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
           GIT_TERMINAL_PROMPT: '0'
@@ -56,6 +61,11 @@ jobs:
           set -Eeuo pipefail
           if [[ ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
+            exit 1
+          fi
+          if [[ ! "$REQUESTED_REF" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
+             [[ "$REQUESTED_REF" == *".."* ]]; then
+            echo "::error title=Invalid private ref::Use a branch name in the private source repository."
             exit 1
           fi
           askpass="$RUNNER_TEMP/private-source-askpass"
@@ -75,7 +85,7 @@ jobs:
           if ! (
             git init --quiet "$source"
             git -C "$source" -c credential.helper= fetch --quiet --depth 1 \
-              "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$REQUESTED_REVISION"
+              "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "refs/heads/$REQUESTED_REF"
             git -C "$source" checkout --quiet --detach FETCH_HEAD
           ) >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
             echo "::error title=Private checkout failed::Private source checkout failed; credentials and checkout diagnostics were suppressed."
