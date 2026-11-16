@@ -18,11 +18,9 @@ In `maxinoin/build-411a0636bf44`, open **Settings → Secrets and variables → 
 
 The workflow pins `actions/create-github-app-token` to its v3 commit and scopes each generated token to `maxinoin/KnightRoute`. Installation tokens expire after one hour and are revoked when the job finishes.
 
-## Automatic IPA queue
+## Manual IPA builds from the shared queue
 
-The `Build iOS` workflow checks the private `codex/ipa-queue` branch every 15 minutes. Its first scheduled check records the current queue head as a baseline without starting a Mac build, so it cannot release work that was already in progress when automation was enabled. A later completed queue push is built once, runs the iOS Simulator suite, and uploads the unsigned IPA to a private prerelease in `maxinoin/KnightRoute`. It uses the same short-lived App tokens above for private checkout, release upload, and a private processed-revision tag; it does not require a cross-repository dispatch token. Multiple commits pushed close together are coalesced into the latest queue head. A failed revision is not retried automatically to avoid repeatedly spending Mac runner minutes; use workflow dispatch to retry that SHA. The scheduled event can be delayed by GitHub Actions load.
-
-The queue automation does not download the IPA to the user's computer. The private prerelease remains available for retrieval after the build.
+Completed iOS changes should be integrated into `maxinoin/KnightRoute` branch `codex/ipa-queue`. Pushing changes there only stages them; it does not start a build. When the user asks for an IPA, manually run **Actions → Build iOS** in this broker. Leaving `private_source_sha` blank builds the latest queue head; setting it builds that exact full commit SHA. The workflow uses the same short-lived App tokens above for private checkout and private prerelease upload, so the App can replace expiring PATs. The IPA is uploaded to a private prerelease and is not downloaded to the user's computer automatically.
 
 ## Verify and retire the PAT fallback
 
