@@ -1,0 +1,146 @@
+name: Analyze private iOS Tailspin
+
+on:
+  workflow_dispatch:
+    inputs:
+      private_source_sha:
+        description: Exact commit in the configured private source repository
+        type: string
+        required: true
+      tailspin_path:
+        description: Relative path to a gzip-compressed Tailspin in that private commit
+        type: string
+        required: false
+        default: diagnostics/tailspin/KnightRoute.tailspin.gz
+
+permissions:
+  contents: none
+
+concurrency:
+  group: ios-tailspin-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: Decode Tailspin privately
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Validate private source configuration
+        shell: bash
+        env:
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          SOURCE_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN != '' }}
+          UPLOAD_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+             [[ "$SOURCE_TOKEN_CONFIGURED" != "true" ]] ||
+             [[ "$UPLOAD_TOKEN_CONFIGURED" != "true" ]]; then
+            echo "::error title=Private diagnostic configuration invalid::The private source or upload credentials are not configured."
+            exit 1
+          fi
+
+      - name: Fetch exact private source revision
+        shell: bash
+        env:
+          REQUESTED_REVISION: ${{ inputs.private_source_sha }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          PRIVATE_SOURCE_READ_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_TRACE: '0'
+          GIT_TRACE_CURL: '0'
+          GIT_CURL_VERBOSE: '0'
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
+            exit 1
+          fi
+          askpass="$RUNNER_TEMP/private-source-askpass"
+          trap 'rm -f "$askpass"' EXIT
+          umask 077
+          cat >"$askpass" <<'ASKPASS'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$PRIVATE_SOURCE_READ_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          ASKPASS
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          source="$RUNNER_TEMP/private-source"
+          if ! (
+            git init --quiet "$source"
+            git -C "$source" -c credential.helper= fetch --quiet --depth 1 \
+              "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$REQUESTED_REVISION"
+            git -C "$source" checkout --quiet --detach FETCH_HEAD
+          ) >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
+            echo "::error title=Private checkout failed::Private source checkout failed; credentials and checkout diagnostics were suppressed."
+            exit 1
+          fi
+          revision="$(git -C "$source" rev-parse HEAD)"
+          if [[ "$revision" != "$REQUESTED_REVISION" ]]; then
+            echo "::error title=Private revision mismatch::The checked out commit did not match the requested revision."
+            exit 1
+          fi
+
+      - name: Decode with macOS spindump
+        shell: bash
+        env:
+          TAILSPIN_PATH: ${{ inputs.tailspin_path }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "$TAILSPIN_PATH" =~ ^[A-Za-z0-9_./-]+$ ]] ||
+             [[ "$TAILSPIN_PATH" == *".."* ]]; then
+            echo "::error title=Invalid Tailspin path::Use a relative path inside the private source checkout."
+            exit 1
+          fi
+          source="$RUNNER_TEMP/private-source"
+          compressed="$source/$TAILSPIN_PATH"
+          if [[ ! -f "$compressed" ]]; then
+            echo "::error title=Tailspin file missing::The requested file was not found in the private source revision."
+            exit 1
+          fi
+          gzip -t "$compressed"
+          gzip -dc "$compressed" >"$RUNNER_TEMP/KnightRoute.tailspin"
+          /usr/sbin/spindump -i "$RUNNER_TEMP/KnightRoute.tailspin" \
+            -o "$RUNNER_TEMP/KnightRoute.spindump.txt" -timeline -noBinary
+          if [[ ! -s "$RUNNER_TEMP/KnightRoute.spindump.txt" ]]; then
+            echo "::error title=Spindump report missing::macOS did not produce a report."
+            exit 1
+          fi
+          echo "Tailspin decoding completed on the ephemeral macOS runner."
+
+      - name: Upload report to private source repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+        run: |
+          set -Eeuo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            if ! brew install --quiet gh >/dev/null 2>&1; then
+              echo "::error title=Private report upload failed::Could not install GitHub CLI."
+              exit 1
+            fi
+          fi
+          if [[ "$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' 2>/dev/null)" != "true" ]]; then
+            echo "::error title=Private upload blocked::The destination could not be verified as private."
+            exit 1
+          fi
+          source_revision="$(git -C "$RUNNER_TEMP/private-source" rev-parse HEAD)"
+          release_tag="ios-tailspin-analysis-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if ! gh release create "$release_tag" "$RUNNER_TEMP/KnightRoute.spindump.txt" \
+            --repo "$PRIVATE_SOURCE_REPOSITORY" \
+            --target "$source_revision" \
+            --latest=false \
+            --title "Private iOS Tailspin analysis $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --notes "Private macOS spindump report decoded from a supplied iOS Tailspin. The Tailspin and report were not published to this broker repository." \
+            --prerelease >"$RUNNER_TEMP/private-report-upload.log" 2>&1; then
+            echo "::error title=Private report upload failed::Could not upload the decoded report; response details were suppressed."
+            exit 1
+          fi
+          echo "Decoded report uploaded to a private prerelease."
