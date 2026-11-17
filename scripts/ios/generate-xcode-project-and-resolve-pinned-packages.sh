@@ -8,7 +8,7 @@ if [[ ! "$IOS_PROJECT_DIRECTORY" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
 fi
 source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
 
-export PATH="$RUNNER_TEMP/ios-tools:$PATH"
+# Use the complete Homebrew installation: XcodeGen requires bundled presets.
 if ! command -v xcodegen >/dev/null 2>&1; then
   if ! brew install --quiet xcodegen >/dev/null 2>&1; then
     echo "::error title=Build setup failed::Could not install XcodeGen; installer output was suppressed."

@@ -12,7 +12,7 @@ All builds are manual. The public broker reads the private shared `codex/ipa-que
 
 Scripts live in `scripts/ios`. Each run checks out the exact public workflow revision. Simulator test products are compiled once and reused by test-without-building. Device Release products require a separate compilation.
 
-Dependency cache assets live exclusively in private KnightRoute prereleases tagged `ios-dependencies-v1-*`. Keys include the project specification, Xcode version, architecture and cache schema. Only downloaded Swift packages and XcodeGen are cached; app source, credentials, data and DerivedData are excluded. Delete these private cache releases to clear the cache. Missing caches resolve dependencies normally. Saving a cache is best effort; tests and builds still decide success.
+Dependency cache assets live exclusively in private KnightRoute prereleases tagged `ios-dependencies-v1-*`. Keys include the project specification, Xcode version, architecture and cache schema. Only downloaded Swift packages are cached; app source, credentials, data and DerivedData are excluded. Delete these private cache releases to clear the cache. Missing caches resolve dependencies normally. Saving a cache is best effort; tests and builds still decide success.
 
 Preview, test-only and IPA operations use separate concurrency groups. Backend checks stay on the developer PC. A preview is not a regression-suite pass. Test failures block IPA delivery. The private legacy build entry points users to this broker.
 

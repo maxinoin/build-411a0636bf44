@@ -17,11 +17,10 @@ if [[ "$1" == restore ]]; then
 else
   if gh release view "$tag" --repo "$PRIVATE_SOURCE_REPOSITORY" > /dev/null 2>&1; then exit 0; fi
   mkdir -p "$RUNNER_TEMP/ios-tools"
-  if command -v xcodegen >/dev/null; then cp "$(command -v xcodegen)" "$RUNNER_TEMP/ios-tools/xcodegen"; fi
-  tar -czf "$archive" -C "$RUNNER_TEMP" ios-source-packages ios-tools
+  tar -czf "$archive" -C "$RUNNER_TEMP" ios-source-packages
   gh release create "$tag" "$archive" --repo "$PRIVATE_SOURCE_REPOSITORY" \
     --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
     --prerelease --latest=false --title 'Private iOS dependency cache' \
-    --notes 'Swift dependencies and XcodeGen only. No app source or DerivedData.' >"$RUNNER_TEMP/cache.log" 2>&1
+    --notes 'Swift dependencies only. No app source or DerivedData.' >"$RUNNER_TEMP/cache.log" 2>&1
   echo "Private dependency cache saved."
 fi
