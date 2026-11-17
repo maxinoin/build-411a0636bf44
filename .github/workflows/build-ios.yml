@@ -162,6 +162,7 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/check-out-private-source-with-a-read-only-token.sh"
 
       - name: Restore private dependency cache
+        timeout-minutes: 5
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
@@ -174,6 +175,7 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/generate-xcode-project-and-resolve-pinned-packages.sh"
 
       - name: Save private dependency cache
+        timeout-minutes: 5
         shell: bash
         continue-on-error: true
         env:
@@ -210,7 +212,7 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
       - name: Upload filtered build diagnostics privately
-        if: (failure() || steps.simulator-tests.outcome == 'failure') && env.DELIVER_PRIVATE_IPA == 'true' && !inputs.visual_audit
+        if: (failure() || steps.simulator-tests.outcome == 'failure') && !inputs.visual_audit
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}

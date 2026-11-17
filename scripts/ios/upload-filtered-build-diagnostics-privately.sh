@@ -83,7 +83,11 @@ if ! destination_private="$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.pri
   exit 1
 fi
 release_tag="ios-build-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-if ! gh release create "$release_tag" "$diagnostics" \
+files=("$diagnostics")
+for contract_log in "$RUNNER_TEMP"/contract-*.log; do
+  [[ -f "$contract_log" ]] && files+=("$contract_log")
+done
+if ! gh release create "$release_tag" "${files[@]}" \
   --repo "$PRIVATE_SOURCE_REPOSITORY" \
   --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
   --latest=false \
