@@ -4,6 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import tempfile
+import zipfile
 
 spec = importlib.util.spec_from_file_location("visual_review", Path(__file__).parents[1] / "scripts/ios/visual_review.py")
 module = importlib.util.module_from_spec(spec)
@@ -22,6 +25,28 @@ class ReviewGateTests(unittest.TestCase):
 
     def check(self, revision=None):
         module.validate(self.index, self.review, self.run, revision or "a" * 40, self.archives)
+
+    def test_index_records_png_and_archive_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / "live-route-captures.zip"
+            with zipfile.ZipFile(archive, "w") as z:
+                z.writestr("captures/route.png", b"\x89PNG\r\n\x1a\nfixture")
+                z.writestr("__MACOSX/._route.png", b"metadata")
+            env = {"RUNNER_TEMP": folder, "GITHUB_WORKSPACE": folder, "GITHUB_SHA": "b" * 40,
+                   "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}
+            with patch.dict(module.os.environ, env), patch.object(module.subprocess, "check_output", return_value="a" * 40):
+                module.capture_index()
+            index = json.loads((Path(folder) / "capture-index.json").read_text())
+            self.assertEqual(index["source_sha"], "a" * 40)
+            self.assertEqual(len(index["images"]), 1)
+            self.assertEqual(index["archives"][0]["sha256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+
+    def test_capture_without_images_cannot_be_reviewed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env = {"RUNNER_TEMP": folder, "GITHUB_WORKSPACE": folder, "GITHUB_SHA": "b" * 40,
+                   "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}
+            with patch.dict(module.os.environ, env), patch.object(module.subprocess, "check_output", return_value="a" * 40):
+                with self.assertRaises(ValueError): module.capture_index()
 
     def test_reviewed_exact_revision_passes(self): self.check()
     def test_new_code_invalidates_review(self):
