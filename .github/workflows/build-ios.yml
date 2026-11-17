@@ -320,9 +320,13 @@ jobs:
             mkdir -p "$RUNNER_TEMP/live-route-captures"
             (
               for sample in $(seq 1 120); do
-                xcrun simctl io "$simulator_id" screenshot \
-                  "$RUNNER_TEMP/live-route-captures/$(printf '%03d' "$sample").png" \
-                  >/dev/null 2>&1 || true
+                # XCTest may boot a cloned device instead of the requested UDID.
+                while IFS= read -r booted_id; do
+                  [[ -n "$booted_id" ]] || continue
+                  xcrun simctl io "$booted_id" screenshot \
+                    "$RUNNER_TEMP/live-route-captures/$(printf '%03d' "$sample")-$booted_id.png" \
+                    >/dev/null 2>&1 || true
+                done < <(xcrun simctl list devices booted -j | python3 -c 'import json,sys; print("\n".join(d["udid"] for rows in json.load(sys.stdin)["devices"].values() for d in rows if d["state"] == "Booted"))')
                 sleep 5
               done
             ) &
