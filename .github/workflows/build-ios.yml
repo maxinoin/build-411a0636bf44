@@ -8,7 +8,7 @@ on:
         type: string
         required: false
       run_ui_tests:
-        description: Run the iPhone Simulator UI suite before creating the IPA
+        description: Run the full regression suite (required for IPA delivery)
         type: boolean
         required: false
         default: true
@@ -17,6 +17,11 @@ on:
         type: boolean
         required: false
         default: true
+      test_suite:
+        description: Focused checks for test-only runs; IPA delivery always uses full
+        type: choice
+        options: [full, sheets, picker]
+        default: full
       visual_audit:
         description: Run targeted sheet-state tests and privately deliver the simulator result bundle
         type: boolean
@@ -41,7 +46,7 @@ permissions:
   contents: none
 
 concurrency:
-  group: ios-build-${{ github.ref }}-${{ inputs.run_ui_tests && 'tests' || 'build' }}
+  group: ios-${{ github.ref }}-${{ inputs.visual_audit && 'preview' || inputs.deliver_private_ipa && 'ipa' || 'tests' }}
   cancel-in-progress: false
 
 jobs:
@@ -54,6 +59,13 @@ jobs:
       should_build: ${{ steps.resolve.outputs.should_build }}
       auth_mode: ${{ steps.auth.outputs.auth_mode }}
     steps:
+      - name: Check out versioned workflow scripts
+        shell: bash
+        run: |
+          git init --quiet "$RUNNER_TEMP/broker"
+          git -C "$RUNNER_TEMP/broker" fetch --quiet --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/broker" checkout --quiet --detach FETCH_HEAD
+
       - name: Validate private source authentication
         id: auth
         shell: bash
@@ -63,29 +75,7 @@ jobs:
           APP_PRIVATE_KEY_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY != '' }}
           SOURCE_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN != '' }}
           UPLOAD_TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error title=Private source configuration invalid::The private source repository is not configured."
-            exit 1
-          fi
-          if [[ -n "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" == "true" ]]; then
-            if [[ -z "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" != "true" ]]; then
-              echo "::error title=GitHub App configuration incomplete::Set both PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID and PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY."
-              exit 1
-            fi
-            if [[ "$PRIVATE_SOURCE_REPOSITORY" != "maxinoin/KnightRoute" ]]; then
-              echo "::error title=GitHub App repository mismatch::The App token is scoped to maxinoin/KnightRoute."
-              exit 1
-            fi
-            echo "auth_mode=app" >> "$GITHUB_OUTPUT"
-          elif [[ "$SOURCE_TOKEN_CONFIGURED" == "true" && "$UPLOAD_TOKEN_CONFIGURED" == "true" ]]; then
-            echo "auth_mode=pat" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Legacy token fallback::Using PAT secrets. Configure the GitHub App credentials to avoid expiring tokens."
-          else
-            echo "::error title=Private source authentication missing::Configure the GitHub App credentials or both fallback PAT secrets."
-            exit 1
-          fi
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/validate-private-source-authentication.sh"
 
       - name: Mint short-lived private source token
         id: source_app_token
@@ -105,31 +95,7 @@ jobs:
           REQUESTED_REVISION: ${{ inputs.private_source_sha }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
-        run: |
-          set -Eeuo pipefail
-          if [[ -n "$REQUESTED_REVISION" ]]; then
-            if [[ ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error title=Invalid private revision::Use a full lowercase commit SHA."
-              exit 1
-            fi
-            revision="$REQUESTED_REVISION"
-          else
-            response="$(curl --silent --show-error --fail \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $PRIVATE_SOURCE_READ_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --get --data-urlencode 'sha=codex/ipa-queue' --data-urlencode 'per_page=1' \
-              "https://api.github.com/repos/$PRIVATE_SOURCE_REPOSITORY/commits")"
-            revision="$(jq -er '.[0].sha' <<< "$response")"
-            if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error title=Queue revision unavailable::The private IPA queue branch has no valid commit."
-              exit 1
-            fi
-          fi
-
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "should_build=true" >> "$GITHUB_OUTPUT"
-          echo "Resolved the source revision for the manually requested IPA build."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/resolve-queued-revision-for-this-manual-build.sh"
 
   build:
     # workflow_dispatch can target another ref; never expose secrets off main.
@@ -140,10 +106,17 @@ jobs:
     env:
       IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
       IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
-      RUN_UI_TESTS: ${{ inputs.run_ui_tests || inputs.visual_audit }}
+      RUN_UI_TESTS: ${{ inputs.run_ui_tests || inputs.visual_audit || inputs.deliver_private_ipa }}
       DELIVER_PRIVATE_IPA: ${{ inputs.deliver_private_ipa }}
 
     steps:
+      - name: Check out versioned workflow scripts
+        shell: bash
+        run: |
+          git init --quiet "$RUNNER_TEMP/broker"
+          git -C "$RUNNER_TEMP/broker" fetch --quiet --depth 1 "https://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/broker" checkout --quiet --detach FETCH_HEAD
+
       - name: Check private-release delivery configuration
         if: env.DELIVER_PRIVATE_IPA == 'true' || inputs.visual_audit
         shell: bash
@@ -151,11 +124,7 @@ jobs:
           APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
           APP_PRIVATE_KEY_CONFIGURED: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY != '' }}
           TOKEN_CONFIGURED: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN != '' }}
-        run: |
-          if [[ -z "$APP_CLIENT_ID" || "$APP_PRIVATE_KEY_CONFIGURED" != "true" ]] && [[ "$TOKEN_CONFIGURED" != "true" ]]; then
-            echo "::error title=Private IPA delivery is not configured::Configure the GitHub App credentials or PRIVATE_IPA_UPLOAD_TOKEN."
-            exit 1
-          fi
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/check-private-release-delivery-configuration.sh"
 
       - name: Mint short-lived private source read token
         id: source_app_token
@@ -190,91 +159,33 @@ jobs:
           GIT_TRACE: '0'
           GIT_TRACE_CURL: '0'
           GIT_CURL_VERBOSE: '0'
-        run: |
-          set -Eeuo pipefail
-          if [[ ! "$PRIVATE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ -z "$PRIVATE_SOURCE_READ_TOKEN" ]]; then
-            echo "::error title=Checkout configuration invalid::Configure the private source repository and read token."
-            exit 1
-          fi
-          askpass="$RUNNER_TEMP/private-source-askpass"
-          trap 'rm -f "$askpass"' EXIT
-          umask 077
-          cat >"$askpass" <<'ASKPASS'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) printf '%s\n' "$PRIVATE_SOURCE_READ_TOKEN" ;;
-            *) exit 1 ;;
-          esac
-          ASKPASS
-          chmod 700 "$askpass"
-          export GIT_ASKPASS="$askpass"
-          source="$GITHUB_WORKSPACE/private-source"
-          if [[ "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
-            revision_ref="$REQUESTED_REVISION"
-          else
-            echo "::error title=Invalid private revision::The resolved private revision is not a full lowercase commit SHA."
-            exit 1
-          fi
-          if ! (
-            git init --quiet "$source"
-            git -C "$source" -c credential.helper= fetch --quiet --depth 1 \
-              "https://github.com/$PRIVATE_SOURCE_REPOSITORY.git" "$revision_ref"
-            git -C "$source" checkout --quiet --detach FETCH_HEAD
-          ) >"$RUNNER_TEMP/private-checkout.log" 2>&1; then
-            echo "::error title=Private checkout failed::Source checkout failed; private diagnostics were suppressed."
-            exit 1
-          fi
-          revision="$(git -C "$source" rev-parse HEAD)"
-          if [[ -n "$REQUESTED_REVISION" && "$revision" != "$REQUESTED_REVISION" ]]; then
-            echo "::error title=Private revision mismatch::The checked out commit did not match the requested commit."
-            exit 1
-          fi
-          echo "::add-mask::$revision"
-          echo "Private source checkout completed."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/check-out-private-source-with-a-read-only-token.sh"
+
+      - name: Restore private dependency cache
+        shell: bash
+        env:
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/dependency-cache.sh" restore
 
       - name: Generate Xcode project and resolve pinned packages
         id: package-resolution
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! "$IOS_PROJECT_DIRECTORY" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
-             [[ "/$IOS_PROJECT_DIRECTORY/" == *"/../"* ]] ||
-             [[ ! "$IOS_SCHEME" =~ ^[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error title=Build configuration invalid::Configure the private project directory and scheme secrets."
-            exit 1
-          fi
-          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/generate-xcode-project-and-resolve-pinned-packages.sh"
 
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            if ! brew install --quiet xcodegen >/dev/null 2>&1; then
-              echo "::error title=Build setup failed::Could not install XcodeGen; installer output was suppressed."
-              exit 1
-            fi
-          fi
+      - name: Save private dependency cache
+        shell: bash
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/dependency-cache.sh" save
 
-          if ! (cd "$source_dir" && xcodegen generate --spec project.yml) \
-            >"$RUNNER_TEMP/xcodegen.log" 2>&1; then
-            echo "::error title=Project generation failed::XcodeGen failed; private project diagnostics were suppressed."
-            exit 1
-          fi
-
-          mkdir -p "$RUNNER_TEMP/ios-derived" "$RUNNER_TEMP/ios-source-packages"
-          set +e
-          xcodebuild -resolvePackageDependencies \
-            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
-            -scheme "$IOS_SCHEME" \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
-            >"$RUNNER_TEMP/package-resolution.log" 2>&1
-          resolve_status=$?
-          set -e
-
-          if [ "$resolve_status" -ne 0 ]; then
-            echo "::error title=Dependency resolution failed::Swift package resolution failed; private dependency diagnostics were suppressed."
-            exit "$resolve_status"
-          fi
-
-          echo "The app's pinned Swift packages resolved successfully."
+      - name: Run independent Swift contracts
+        id: contracts
+        if: env.RUN_UI_TESTS == 'true' && (!inputs.visual_audit || inputs.deliver_private_ipa)
+        shell: bash
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/contracts.sh"
 
       - name: Run iOS Simulator UI tests
         id: simulator-tests
@@ -283,155 +194,20 @@ jobs:
         timeout-minutes: ${{ inputs.visual_route_only && 20 || 45 }}
         shell: bash
         env:
-          VISUAL_AUDIT: ${{ inputs.visual_audit }}
+          TEST_SUITE: ${{ inputs.deliver_private_ipa && 'full' || inputs.test_suite }}
+          VISUAL_AUDIT: ${{ inputs.visual_audit && !inputs.deliver_private_ipa }}
           VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
           VISUAL_BUS_ONLY: ${{ inputs.visual_bus_only }}
           VISUAL_ROUTE_ONLY: ${{ inputs.visual_route_only }}
-        run: |
-          set -Eeuo pipefail
-          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
-          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime,rows in devices.items() if "iOS" in runtime for device in rows if device["name"].startswith("iPhone")))') || {
-            echo "::error title=Simulator unavailable::No available iPhone Simulator was found."
-            exit 1
-          }
-
-          if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
-            xcodebuild build \
-              -project "$source_dir/$IOS_SCHEME.xcodeproj" -scheme "$IOS_SCHEME" \
-              -configuration Debug -destination "platform=iOS Simulator,id=$simulator_id" \
-              -derivedDataPath "$RUNNER_TEMP/ios-derived" \
-              -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
-              CODE_SIGNING_ALLOWED=NO >"$RUNNER_TEMP/xcode-test.log" 2>&1
-            xcrun simctl boot "$simulator_id" >/dev/null 2>&1 || true
-            xcrun simctl bootstatus "$simulator_id" -b >>"$RUNNER_TEMP/xcode-test.log" 2>&1
-            app_path="$RUNNER_TEMP/ios-derived/Build/Products/Debug-iphonesimulator/$IOS_SCHEME.app"
-            bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app_path/Info.plist")
-            xcrun simctl install "$simulator_id" "$app_path" >>"$RUNNER_TEMP/xcode-test.log" 2>&1
-            xcrun simctl ui "$simulator_id" appearance dark
-            xcrun simctl launch "$simulator_id" "$bundle_id" \
-              --design-preview --map-interaction-test -knightGoAppearance dark \
-              -knightGoArrivalDisplayMode knightGo -knightGoOnboardingCompleted YES \
-              -knightGoLastSelectedRouteID 1 >>"$RUNNER_TEMP/xcode-test.log" 2>&1
-            mkdir -p "$RUNNER_TEMP/live-route-captures"
-            for sample in $(seq 1 6); do
-              sleep 5
-              xcrun simctl io "$simulator_id" screenshot \
-                "$RUNNER_TEMP/live-route-captures/route-preview-$sample.png" >>"$RUNNER_TEMP/xcode-test.log" 2>&1
-            done
-            echo "Route preview captured from the launched app."
-            exit 0
-          fi
-          set +e
-          xcodebuild_test_args=(test)
-          test_allowance=180
-          test_maximum=240
-          if [[ "$VISUAL_AUDIT" == "true" ]]; then
-            xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
-            if [[ "$VISUAL_OTHER_SHEETS_ONLY" == "true" ]]; then
-              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
-            fi
-            if [[ "$VISUAL_BUS_ONLY" == "true" ]]; then
-              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInLightMode)
-            fi
-            if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
-              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testRoutePreview)
-            fi
-            test_allowance=600
-            test_maximum=600
-          fi
-          # Capture the simulator while the test is running, including if
-          # XCTest stalls before it can export its own attachments. Files stay
-          # on the runner until the private upload step below.
-          if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
-            mkdir -p "$RUNNER_TEMP/live-route-captures"
-            (
-              for sample in $(seq 1 120); do
-                # XCTest may boot a cloned device instead of the requested UDID.
-                while IFS= read -r booted_id; do
-                  [[ -n "$booted_id" ]] || continue
-                  xcrun simctl io "$booted_id" screenshot \
-                    "$RUNNER_TEMP/live-route-captures/$(printf '%03d' "$sample")-$booted_id.png" \
-                    >/dev/null 2>&1 || true
-                done < <(xcrun simctl list devices booted -j | python3 -c 'import json,sys; print("\n".join(d["udid"] for rows in json.load(sys.stdin)["devices"].values() for d in rows if d["state"] == "Booted"))')
-                sleep 5
-              done
-            ) &
-            capture_pid=$!
-            trap 'kill "$capture_pid" 2>/dev/null || true; wait "$capture_pid" 2>/dev/null || true' EXIT
-          fi
-          xcodebuild "${xcodebuild_test_args[@]}" \
-            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
-            -scheme "$IOS_SCHEME" \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,id=$simulator_id" \
-            -derivedDataPath "$RUNNER_TEMP/ios-derived" \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
-            -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance "$test_allowance" \
-            -maximum-test-execution-time-allowance "$test_maximum" \
-            CODE_SIGNING_ALLOWED=NO \
-            >"$RUNNER_TEMP/xcode-test.log" 2>&1
-          test_status=$?
-          set -e
-
-          if [ "$test_status" -ne 0 ]; then
-            echo "::error title=Simulator tests failed::The iOS Simulator tests failed (exit $test_status); private test diagnostics were suppressed."
-            exit "$test_status"
-          fi
-
-          echo "The optional iOS Simulator UI test suite passed."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/run-ios-simulator-ui-tests.sh"
 
       - name: Build and package unsigned arm64 IPA
-        if: ${{ !inputs.visual_audit || env.DELIVER_PRIVATE_IPA == 'true' }}
+        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.simulator-tests.outcome == 'success'
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
           SENTRY_ENVIRONMENT: production
-        run: |
-          set -Eeuo pipefail
-          source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
-          derived_data="$RUNNER_TEMP/ios-derived"
-          source_revision="$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)"
-          sentry_release="$(printf '%s' "$IOS_SCHEME" | tr '[:upper:]' '[:lower:]')-ios@$source_revision"
-
-          set +e
-          xcodebuild -quiet \
-            -project "$source_dir/$IOS_SCHEME.xcodeproj" \
-            -scheme "$IOS_SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$derived_data" \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=NO \
-            SENTRY_DSN="${SENTRY_IOS_DSN:-}" \
-            SENTRY_RELEASE="$sentry_release" \
-            SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build >"$RUNNER_TEMP/xcodebuild.log" 2>&1
-          build_status=$?
-          set -e
-
-          if [ "$build_status" -ne 0 ]; then
-            echo "::error title=iOS build failed::The unsigned iPhone build failed (exit $build_status); private Xcode diagnostics were suppressed."
-            exit "$build_status"
-          fi
-
-          app_path="$derived_data/Build/Products/Release-iphoneos/$IOS_SCHEME.app"
-          if [[ ! -d "$app_path" ]]; then
-            echo "::error title=IPA packaging failed::Xcode completed but the expected app bundle was not found."
-            exit 1
-          fi
-
-          package_path="$RUNNER_TEMP/ios-package"
-          mkdir -p "$package_path/Payload"
-          ditto "$app_path" "$package_path/Payload/$IOS_SCHEME.app"
-          (cd "$package_path" && /usr/bin/zip -qry "$RUNNER_TEMP/app-unsigned.ipa" Payload)
-          echo "The unsigned arm64 iPhone IPA was built on the ephemeral runner."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
       - name: Upload filtered build diagnostics privately
         if: (failure() || steps.simulator-tests.outcome == 'failure') && env.DELIVER_PRIVATE_IPA == 'true' && !inputs.visual_audit
@@ -440,140 +216,17 @@ jobs:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           XCRESULT_BUNDLE: ${{ runner.temp }}/ios-ui-tests.xcresult
-        run: |
-          set -Eeuo pipefail
-          source_log="$RUNNER_TEMP/xcodebuild.log"
-          diagnostics="$RUNNER_TEMP/ios-build-diagnostics.txt"
-          python3 - "$source_log" "$diagnostics" <<'PY'
-          import pathlib
-          import re
-          import json
-          import os
-          import subprocess
-          import sys
-          source = pathlib.Path(sys.argv[1])
-          output = pathlib.Path(sys.argv[2])
-          lines = source.read_text(errors="replace").splitlines() if source.exists() else []
-          pattern = re.compile(r"(?:\.swift:\d+:\d+:\s+error:|(?:^|\s)error:|\*\* BUILD FAILED \*\*)")
-          selected = [re.sub(r"^.*?/private-source/", "private-source/", line) for line in lines if pattern.search(line)]
-          test_log = pathlib.Path(str(source).replace("xcodebuild.log", "xcode-test.log"))
-          test_lines = test_log.read_text(errors="replace").splitlines() if test_log.exists() else []
-          test_pattern = re.compile(
-              r"(?:Test Case .*\bfailed\b|Test Suite .*\bfailed\b|"
-              r"Failing tests:|Executed \d+ tests?|Testing failed|"
-              r"XCTAssert\w* failed|Assertion Failure|error:.*(?:XCTAssert|test case))",
-              re.IGNORECASE,
-          )
-          test_details = [
-              re.sub(r"^.*?/private-source/", "private-source/", line)[:800]
-              for line in test_lines if test_pattern.search(line)
-          ]
-          report = selected or ["No compiler diagnostic lines matched; full build logs stayed on the ephemeral runner."]
-          report.append("")
-          report.append("UI test failure summary:")
-          report.extend(test_details[:80])
-          result_bundle = pathlib.Path(os.environ["XCRESULT_BUNDLE"])
-          if result_bundle.exists():
-              try:
-                  result = subprocess.run(
-                      ["xcrun", "xcresulttool", "get", "test-results", "summary",
-                       "--path", str(result_bundle), "--format", "json"],
-                      check=True, capture_output=True, text=True, timeout=20,
-                  )
-                  summary = json.loads(result.stdout)
-                  summary_fields = {
-                      key: summary[key] for key in
-                      ("title", "result", "totalTestCount", "passedTests", "failedTests", "skippedTests")
-                      if key in summary
-                  }
-                  if summary_fields:
-                      report.append("XCResult totals:")
-                      report.append(json.dumps(summary_fields, sort_keys=True))
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-filtered-build-diagnostics-privately.sh"
 
-                  failures = []
-                  def collect_failures(value):
-                      if isinstance(value, dict):
-                          failure_text = value.get("failureText") or value.get("message")
-                          identifier = value.get("testIdentifier") or value.get("nodeIdentifier") or value.get("name")
-                          if failure_text and identifier:
-                              failures.append((str(identifier), str(failure_text)))
-                          for child in value.values():
-                              collect_failures(child)
-                      elif isinstance(value, list):
-                          for child in value:
-                              collect_failures(child)
-                  collect_failures(summary)
-                  if failures:
-                      report.append("XCResult failure details:")
-                      for identifier, message in failures[:40]:
-                          report.append(f"{identifier}: {message[:800]}")
-              except Exception:
-                  report.append("XCResult summary could not be decoded; the bundle remains on the ephemeral runner.")
-          if not test_details and len(report) == 3:
-              report.append("No filtered XCTest failure lines matched; full test logs stayed on the ephemeral runner.")
-          output.write_text("\n".join(report) + "\n")
-          PY
-
-          if ! command -v gh >/dev/null 2>&1; then
-            if ! brew install --quiet gh >/dev/null 2>&1; then
-              echo "::error title=Private diagnostics unavailable::Could not install GitHub CLI."
-              exit 1
-            fi
-          fi
-          if ! destination_private="$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' 2>/dev/null)" || [[ "$destination_private" != "true" ]]; then
-            echo "::error title=Private diagnostics blocked::The destination could not be verified as private."
-            exit 1
-          fi
-          release_tag="ios-build-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if ! gh release create "$release_tag" "$diagnostics" \
-            --repo "$PRIVATE_SOURCE_REPOSITORY" \
-            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
-            --latest=false \
-            --title "Private iOS build diagnostics ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --notes "Filtered compiler and XCTest failure details from the private iOS build. Full source and test logs were not uploaded." \
-            --prerelease >"$RUNNER_TEMP/private-diagnostics-upload.log" 2>&1; then
-            echo "::error title=Private diagnostics upload failed::Could not upload filtered diagnostics."
-            exit 1
-          fi
-          echo "Filtered build diagnostics uploaded to a private prerelease."
       - name: Upload IPA to a private release
         id: private-release
-        if: env.DELIVER_PRIVATE_IPA == 'true'
+        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.simulator-tests.outcome == 'success'
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           SIMULATOR_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
-        run: |
-          set -Eeuo pipefail
-          if ! command -v gh >/dev/null 2>&1; then
-            if ! brew install --quiet gh >/dev/null 2>&1; then
-              echo "::error title=Private upload failed::Could not install GitHub CLI; installer output was suppressed."
-              exit 1
-            fi
-          fi
-
-          # Never deliver an IPA to a public repository, even if the secret is misconfigured.
-          if ! destination_private="$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' \
-            2>"$RUNNER_TEMP/private-visibility-check.log")" || [[ "$destination_private" != "true" ]]; then
-            echo "::error title=Private delivery blocked::The destination could not be verified as private."
-            exit 1
-          fi
-
-          release_tag="ios-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if ! gh release create "$release_tag" \
-            "$RUNNER_TEMP/app-unsigned.ipa" \
-            --repo "$PRIVATE_SOURCE_REPOSITORY" \
-            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
-            --latest=false \
-            --title "Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Simulator UI test outcome: ${SIMULATOR_TEST_RESULT:-skipped}." \
-            --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
-            echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
-            exit 1
-          fi
-
-          echo "The unsigned IPA is available in a private prerelease in the private source repository."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
 
       - name: Upload visual audit privately
         if: always() && inputs.visual_audit && steps.simulator-tests.outcome != 'skipped'
@@ -581,41 +234,9 @@ jobs:
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-        run: |
-          set -Eeuo pipefail
-          if [[ "$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.private' 2>/dev/null)" != "true" ]]; then
-            echo "::error title=Private delivery blocked::The destination could not be verified as private."
-            exit 1
-          fi
-          tag="ios-visual-audit-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          # Deliver the log before packaging optional test bundles.
-          if ! gh release create "$tag" "$RUNNER_TEMP/xcode-test.log" \
-            --repo "$PRIVATE_SOURCE_REPOSITORY" \
-            --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
-            --latest=false --prerelease --title "Private simulator visual audit" \
-            --notes "Private simulator screenshots and test diagnostics." \
-            >"$RUNNER_TEMP/private-visual-upload.log" 2>&1; then
-            echo "::error::Private release creation failed."
-            sed -E 's#https?://[^ ]+#[URL]#g' "$RUNNER_TEMP/private-visual-upload.log" | tail -n 4
-            exit 1
-          fi
-          if compgen -G "$RUNNER_TEMP/live-route-captures/*.png" >/dev/null; then
-            ditto -c -k --keepParent "$RUNNER_TEMP/live-route-captures" "$RUNNER_TEMP/live-route-captures.zip"
-            gh release upload "$tag" "$RUNNER_TEMP/live-route-captures.zip" \
-              --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
-          fi
-          if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
-            mkdir -p "$RUNNER_TEMP/sheet-attachments"
-            if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-ui-tests.xcresult" --output-path "$RUNNER_TEMP/sheet-attachments" >"$RUNNER_TEMP/sheet-export.log" 2>&1; then
-              ditto -c -k --keepParent "$RUNNER_TEMP/sheet-attachments" "$RUNNER_TEMP/sheet-screenshots.zip"
-              gh release upload "$tag" "$RUNNER_TEMP/sheet-screenshots.zip" --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
-            fi
-          fi
-          echo "Simulator results uploaded privately."
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-visual-audit-privately.sh"
 
       - name: Report simulator test failure after private delivery
         if: always() && steps.simulator-tests.outcome == 'failure'
         shell: bash
-        run: |
-          echo "::error title=Simulator tests failed::Simulator execution failed; check the private diagnostics upload step for delivery status."
-          exit 1
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/report-simulator-test-failure-after-private-delivery.sh"
