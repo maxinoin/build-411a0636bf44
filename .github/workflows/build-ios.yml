@@ -280,7 +280,7 @@ jobs:
         id: simulator-tests
         if: env.RUN_UI_TESTS == 'true'
         continue-on-error: true
-        timeout-minutes: ${{ inputs.visual_route_only && 10 || 45 }}
+        timeout-minutes: ${{ inputs.visual_route_only && 20 || 45 }}
         shell: bash
         env:
           VISUAL_AUDIT: ${{ inputs.visual_audit }}
@@ -295,6 +295,32 @@ jobs:
             exit 1
           }
 
+          if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
+            xcodebuild build \
+              -project "$source_dir/$IOS_SCHEME.xcodeproj" -scheme "$IOS_SCHEME" \
+              -configuration Debug -destination "platform=iOS Simulator,id=$simulator_id" \
+              -derivedDataPath "$RUNNER_TEMP/ios-derived" \
+              -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
+              CODE_SIGNING_ALLOWED=NO >"$RUNNER_TEMP/xcode-test.log" 2>&1
+            xcrun simctl boot "$simulator_id" >/dev/null 2>&1 || true
+            xcrun simctl bootstatus "$simulator_id" -b >>"$RUNNER_TEMP/xcode-test.log" 2>&1
+            app_path="$RUNNER_TEMP/ios-derived/Build/Products/Debug-iphonesimulator/$IOS_SCHEME.app"
+            bundle_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app_path/Info.plist")
+            xcrun simctl install "$simulator_id" "$app_path" >>"$RUNNER_TEMP/xcode-test.log" 2>&1
+            xcrun simctl ui "$simulator_id" appearance dark
+            xcrun simctl launch "$simulator_id" "$bundle_id" \
+              --design-preview --map-interaction-test -knightGoAppearance dark \
+              -knightGoArrivalDisplayMode knightGo -knightGoOnboardingCompleted YES \
+              -knightGoLastSelectedRouteID 1 >>"$RUNNER_TEMP/xcode-test.log" 2>&1
+            mkdir -p "$RUNNER_TEMP/live-route-captures"
+            for sample in $(seq 1 6); do
+              sleep 5
+              xcrun simctl io "$simulator_id" screenshot \
+                "$RUNNER_TEMP/live-route-captures/route-preview-$sample.png" >>"$RUNNER_TEMP/xcode-test.log" 2>&1
+            done
+            echo "Route preview captured from the launched app."
+            exit 0
+          fi
           set +e
           xcodebuild_test_args=(test)
           test_allowance=180
@@ -561,31 +587,35 @@ jobs:
             echo "::error title=Private delivery blocked::The destination could not be verified as private."
             exit 1
           fi
-          files=("$RUNNER_TEMP/xcode-test.log")
-          if compgen -G "$RUNNER_TEMP/live-route-captures/*.png" >/dev/null; then
-            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/live-route-captures" "$RUNNER_TEMP/live-route-captures.zip"
-            files+=("$RUNNER_TEMP/live-route-captures.zip")
-          fi
-          if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
-            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ios-ui-tests.xcresult" "$RUNNER_TEMP/sheet-visual-results.zip"
-            files+=("$RUNNER_TEMP/sheet-visual-results.zip")
-            mkdir -p "$RUNNER_TEMP/sheet-attachments"
-            if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-ui-tests.xcresult" --output-path "$RUNNER_TEMP/sheet-attachments" >"$RUNNER_TEMP/sheet-export.log" 2>&1; then
-              ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/sheet-attachments" "$RUNNER_TEMP/sheet-screenshots.zip"
-              files+=("$RUNNER_TEMP/sheet-screenshots.zip")
-            fi
-          fi
-          gh release create "ios-visual-audit-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${files[@]}" \
+          tag="ios-visual-audit-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Deliver the log before packaging optional test bundles.
+          if ! gh release create "$tag" "$RUNNER_TEMP/xcode-test.log" \
             --repo "$PRIVATE_SOURCE_REPOSITORY" \
             --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
             --latest=false --prerelease --title "Private simulator visual audit" \
             --notes "Private simulator screenshots and test diagnostics." \
-            >"$RUNNER_TEMP/private-visual-upload.log" 2>&1
+            >"$RUNNER_TEMP/private-visual-upload.log" 2>&1; then
+            echo "::error::Private release creation failed."
+            sed -E 's#https?://[^ ]+#[URL]#g' "$RUNNER_TEMP/private-visual-upload.log" | tail -n 4
+            exit 1
+          fi
+          if compgen -G "$RUNNER_TEMP/live-route-captures/*.png" >/dev/null; then
+            ditto -c -k --keepParent "$RUNNER_TEMP/live-route-captures" "$RUNNER_TEMP/live-route-captures.zip"
+            gh release upload "$tag" "$RUNNER_TEMP/live-route-captures.zip" \
+              --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
+          fi
+          if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
+            mkdir -p "$RUNNER_TEMP/sheet-attachments"
+            if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-ui-tests.xcresult" --output-path "$RUNNER_TEMP/sheet-attachments" >"$RUNNER_TEMP/sheet-export.log" 2>&1; then
+              ditto -c -k --keepParent "$RUNNER_TEMP/sheet-attachments" "$RUNNER_TEMP/sheet-screenshots.zip"
+              gh release upload "$tag" "$RUNNER_TEMP/sheet-screenshots.zip" --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
+            fi
+          fi
           echo "Simulator results uploaded privately."
 
       - name: Report simulator test failure after private delivery
         if: always() && steps.simulator-tests.outcome == 'failure'
         shell: bash
         run: |
-          echo "::error title=Simulator tests failed::Filtered results and the unsigned IPA were delivered privately for review."
+          echo "::error title=Simulator tests failed::Simulator execution failed; check the private diagnostics upload step for delivery status."
           exit 1
