@@ -28,4 +28,6 @@ if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
     gh release upload "$tag" "$RUNNER_TEMP/sheet-screenshots.zip" --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
   fi
 fi
-echo "Simulator results uploaded privately."
+python3 "$RUNNER_TEMP/broker/scripts/ios/visual_review.py" index
+ gh release upload "$tag" "$RUNNER_TEMP/capture-index.json" --repo "$PRIVATE_SOURCE_REPOSITORY" >>"$RUNNER_TEMP/private-visual-upload.log" 2>&1
+echo "Simulator results uploaded privately; visual review is pending."

@@ -7,6 +7,10 @@ on:
         description: Exact commit to build from the configured private repository (defaults to codex/ipa-queue)
         type: string
         required: false
+      reviewed_preview:
+        description: Reviewed private preview tag for this exact app commit (required for IPA)
+        type: string
+        required: false
       run_ui_tests:
         description: Run the full regression suite (required for IPA delivery)
         type: boolean
@@ -96,6 +100,16 @@ jobs:
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/resolve-queued-revision-for-this-manual-build.sh"
+
+      - name: Require visual review of the exact IPA revision
+        if: inputs.deliver_private_ipa
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          REQUESTED_REVISION: ${{ steps.resolve.outputs.revision }}
+          REVIEWED_PREVIEW: ${{ inputs.reviewed_preview }}
+        run: python3 "$RUNNER_TEMP/broker/scripts/ios/visual_review.py" verify
 
   build:
     # workflow_dispatch can target another ref; never expose secrets off main.
