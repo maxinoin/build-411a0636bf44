@@ -4,6 +4,7 @@ All builds are manual. The public broker reads the private shared `codex/ipa-que
 
 | Operation | Inputs | Validation |
 | --- | --- | --- |
+| Swift contracts only | deliver_private_ipa=false, run_ui_tests=false | Independent Swift checks in parallel |
 | Route screenshot | visual_audit=true, visual_route_only=true, deliver_private_ipa=false | Build and launch the app, then six screenshots |
 | Focused tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=picker or sheets | Swift contracts plus selected simulator tests |
 | Full tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=full | Swift contracts plus full simulator suite |
