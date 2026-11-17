@@ -38,6 +38,7 @@ case "${TEST_SUITE:-full}" in
   full) ;;
   sheets) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests) ;;
   picker) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/RoutePickerTransitionTests) ;;
+  startup) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/StartupTests) ;;
   *) echo "::error::Unknown test suite"; exit 1 ;;
 esac
 test_allowance=180
@@ -52,6 +53,9 @@ if [[ "$VISUAL_AUDIT" == "true" ]]; then
   fi
   if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
     xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testRoutePreview)
+  fi
+  if [[ "${TEST_SUITE:-full}" == startup ]]; then
+    xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/StartupTests)
   fi
   test_allowance=600
   test_maximum=600
@@ -82,6 +86,8 @@ xcodebuild "${xcodebuild_test_args[@]}" \
   CODE_SIGNING_ALLOWED=NO \
   >>"$RUNNER_TEMP/xcode-test.log" 2>&1
 test_status=$?
+xcrun simctl spawn "$simulator_id" log show --last 5m --style compact \
+  --predicate 'subsystem == "com.knighteta.app" AND category == "Startup"' >>"$RUNNER_TEMP/xcode-test.log" 2>&1 || true
 set -e
 
 if [ "$test_status" -ne 0 ]; then

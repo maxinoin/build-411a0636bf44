@@ -24,7 +24,7 @@ on:
       test_suite:
         description: Focused checks for test-only runs; IPA delivery always uses full
         type: choice
-        options: [full, sheets, picker]
+        options: [full, sheets, picker, startup]
         default: full
       visual_audit:
         description: Run targeted sheet-state tests and privately deliver the simulator result bundle
