@@ -32,6 +32,11 @@ on:
         type: boolean
         required: false
         default: false
+      visual_route_only:
+        description: Capture one route sheet screenshot in dark mode
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: none
 
@@ -280,6 +285,7 @@ jobs:
           VISUAL_AUDIT: ${{ inputs.visual_audit }}
           VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
           VISUAL_BUS_ONLY: ${{ inputs.visual_bus_only }}
+          VISUAL_ROUTE_ONLY: ${{ inputs.visual_route_only }}
         run: |
           set -Eeuo pipefail
           source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
@@ -299,6 +305,9 @@ jobs:
             fi
             if [[ "$VISUAL_BUS_ONLY" == "true" ]]; then
               xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testBusStatesInLightMode)
+            fi
+            if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
+              xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testRoutePreview)
             fi
             test_allowance=600
             test_maximum=600
