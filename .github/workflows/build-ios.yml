@@ -313,6 +313,22 @@ jobs:
             test_allowance=600
             test_maximum=600
           fi
+          # Capture the simulator while the test is running, including if
+          # XCTest stalls before it can export its own attachments. Files stay
+          # on the runner until the private upload step below.
+          if [[ "$VISUAL_ROUTE_ONLY" == "true" ]]; then
+            mkdir -p "$RUNNER_TEMP/live-route-captures"
+            (
+              for sample in $(seq 1 120); do
+                xcrun simctl io "$simulator_id" screenshot \
+                  "$RUNNER_TEMP/live-route-captures/$(printf '%03d' "$sample").png" \
+                  >/dev/null 2>&1 || true
+                sleep 5
+              done
+            ) &
+            capture_pid=$!
+            trap 'kill "$capture_pid" 2>/dev/null || true; wait "$capture_pid" 2>/dev/null || true' EXIT
+          fi
           xcodebuild "${xcodebuild_test_args[@]}" \
             -project "$source_dir/$IOS_SCHEME.xcodeproj" \
             -scheme "$IOS_SCHEME" \
@@ -542,6 +558,10 @@ jobs:
             exit 1
           fi
           files=("$RUNNER_TEMP/xcode-test.log")
+          if compgen -G "$RUNNER_TEMP/live-route-captures/*.png" >/dev/null; then
+            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/live-route-captures" "$RUNNER_TEMP/live-route-captures.zip"
+            files+=("$RUNNER_TEMP/live-route-captures.zip")
+          fi
           if [[ -d "$RUNNER_TEMP/ios-ui-tests.xcresult" ]]; then
             ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/ios-ui-tests.xcresult" "$RUNNER_TEMP/sheet-visual-results.zip"
             files+=("$RUNNER_TEMP/sheet-visual-results.zip")
