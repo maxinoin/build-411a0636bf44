@@ -7,4 +7,4 @@ swiftc \
   -o "$RUNNER_TEMP/route-sheet-motion-check"
 "$RUNNER_TEMP/route-sheet-motion-check" \
   ios/KnightRoute/KnightRoute/Views/FloatingRouteSheet.swift \
-  ios/KnightRoute/KnightRoute/Views/RideauRoutePicker.swift
+  ios/KnightRoute/KnightRoute/Views/RoutePickerView.swift
