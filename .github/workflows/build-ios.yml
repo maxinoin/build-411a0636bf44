@@ -21,6 +21,11 @@ on:
         type: boolean
         required: false
         default: true
+      allow_failed_ui_tests_for_private_candidate:
+        description: Build a clearly marked private test candidate after the full UI suite fails; the run remains failed and diagnostics are still uploaded
+        type: boolean
+        required: false
+        default: false
       test_suite:
         description: Focused checks for test-only runs; IPA delivery always uses full
         type: choice
@@ -218,7 +223,7 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/run-ios-simulator-ui-tests.sh"
 
       - name: Build and package unsigned arm64 IPA
-        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.simulator-tests.outcome == 'success'
+        if: env.DELIVER_PRIVATE_IPA == 'true' && (steps.simulator-tests.outcome == 'success' || (inputs.allow_failed_ui_tests_for_private_candidate && steps.simulator-tests.outcome == 'failure'))
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
@@ -236,12 +241,13 @@ jobs:
 
       - name: Upload IPA to a private release
         id: private-release
-        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.simulator-tests.outcome == 'success'
+        if: env.DELIVER_PRIVATE_IPA == 'true' && (steps.simulator-tests.outcome == 'success' || (inputs.allow_failed_ui_tests_for_private_candidate && steps.simulator-tests.outcome == 'failure'))
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           SIMULATOR_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
+          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
 
       - name: Upload visual audit privately
