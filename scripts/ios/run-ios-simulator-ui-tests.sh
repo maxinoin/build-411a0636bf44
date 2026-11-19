@@ -29,6 +29,7 @@ if [[ "$VISUAL_AUDIT" == "true" && "$VISUAL_ROUTE_ONLY" == "true" ]]; then
     xcrun simctl io "$simulator_id" screenshot \
       "$RUNNER_TEMP/live-route-captures/route-preview-$sample.png" >>"$RUNNER_TEMP/xcode-test.log" 2>&1
   done
+  echo "test_run_mode=build-only" >> "$GITHUB_OUTPUT"
   echo "Route preview captured from the launched app."
   exit 0
 fi
@@ -44,7 +45,11 @@ esac
 test_allowance=180
 test_maximum=240
 if [[ "$VISUAL_AUDIT" == "true" ]]; then
-  xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+  # A full visual audit runs the complete regression suite; the sheet tests
+  # already capture the screenshots that will be reviewed for this revision.
+  if [[ "${TEST_SUITE:-full}" != full ]]; then
+    xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests)
+  fi
   if [[ "$VISUAL_OTHER_SHEETS_ONLY" == "true" ]]; then
     xcodebuild_test_args=(test -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInDarkMode -only-testing:KnightRouteSheetUITests/SheetStateVisualTests/testOtherSheetsInLightMode)
   fi
@@ -86,6 +91,7 @@ xcodebuild "${xcodebuild_test_args[@]}" \
   CODE_SIGNING_ALLOWED=NO \
   >>"$RUNNER_TEMP/xcode-test.log" 2>&1
 test_status=$?
+echo "test_run_mode=xctest" >> "$GITHUB_OUTPUT"
 xcrun simctl spawn "$simulator_id" log show --last 5m --style compact \
   --predicate 'subsystem == "com.knighteta.app" AND category == "Startup"' >>"$RUNNER_TEMP/xcode-test.log" 2>&1 || true
 set -e

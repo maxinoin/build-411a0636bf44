@@ -16,7 +16,8 @@ def gh(*args):
     return subprocess.check_output(["gh", *args], stderr=subprocess.PIPE)
 
 
-def validate(index, review, run, revision, archives):
+def validate(index, review, run, revision, archives, require_full_suite=False,
+             allow_failed_test_candidate=False):
     if index.get("source_sha") != revision or review.get("source_sha") != revision:
         raise ValueError("Review is stale: capture and review must match the exact app commit")
     if run.get("conclusion") != "success" or run.get("status") != "completed":
@@ -39,13 +40,38 @@ def validate(index, review, run, revision, archives):
             raise ValueError("Screenshot archive changed after capture")
     if not index.get("archives"):
         raise ValueError("No screenshot archive was captured")
+    if require_full_suite:
+        if index.get("visual_audit") is not True or index.get("test_suite") != "full":
+            raise ValueError("IPA review must come from a full-suite visual audit")
+        if index.get("test_run_mode") != "xctest":
+            raise ValueError("Screenshot-only runs cannot authorize IPA delivery")
+        if any(index.get("visual_filters", {}).values()):
+            raise ValueError("Filtered visual audits cannot authorize IPA delivery")
+        if index.get("contracts_result") != "success":
+            raise ValueError("Swift contracts must pass in the reviewed full-suite run")
+        test_result = index.get("simulator_test_result")
+        if test_result == "failure" and allow_failed_test_candidate:
+            return
+        if test_result != "success":
+            raise ValueError("The reviewed full simulator suite must pass before IPA delivery")
 
 
 def capture_index():
     temp = Path(os.environ["RUNNER_TEMP"])
     index = {"source_sha": subprocess.check_output(["git", "-C", str(Path(os.environ["GITHUB_WORKSPACE"]) / "private-source"), "rev-parse", "HEAD"], text=True).strip(),
              "broker_sha": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"],
-             "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"], "archives": [], "images": []}
+             "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+             "visual_audit": os.environ.get("VISUAL_AUDIT") == "true",
+             "test_suite": os.environ.get("TEST_SUITE", ""),
+             "test_run_mode": os.environ.get("TEST_RUN_MODE", ""),
+             "simulator_test_result": os.environ.get("SIMULATOR_TEST_RESULT", ""),
+             "contracts_result": os.environ.get("CONTRACT_RESULT", ""),
+             "visual_filters": {
+                 "other_sheets_only": os.environ.get("VISUAL_OTHER_SHEETS_ONLY") == "true",
+                 "bus_only": os.environ.get("VISUAL_BUS_ONLY") == "true",
+                 "route_only": os.environ.get("VISUAL_ROUTE_ONLY") == "true",
+             },
+             "archives": [], "images": []}
     for name in ("live-route-captures.zip", "sheet-screenshots.zip"):
         path = temp / name
         if not path.exists():
@@ -114,8 +140,17 @@ def main():
         with tempfile.TemporaryDirectory() as folder:
             gh("release", "download", args.tag, "--repo", repo, "--pattern", "visual-review.json", "--dir", folder)
             review = json.loads((Path(folder) / "visual-review.json").read_text())
-        validate(index, review, run, os.environ["REQUESTED_REVISION"], archives)
-        print("Screenshot review verified for the exact IPA source revision.")
+        validate(
+            index, review, run, os.environ["REQUESTED_REVISION"], archives,
+            require_full_suite=True,
+            allow_failed_test_candidate=os.environ.get("ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE") == "true",
+        )
+        test_result = index["simulator_test_result"]
+        output = os.environ.get("GITHUB_OUTPUT")
+        if output:
+            with open(output, "a", encoding="utf-8") as handle:
+                handle.write(f"test_result={test_result}\n")
+        print("Full-suite screenshot review verified for the exact IPA source revision.")
 
 
 if __name__ == "__main__":
