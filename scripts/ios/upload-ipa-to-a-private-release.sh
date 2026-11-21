@@ -33,7 +33,7 @@ if ! gh release create "$release_tag" \
   --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
   --latest=false \
   --title "$release_title" \
-  --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Simulator UI test outcome: ${test_result} (${SIMULATOR_TEST_RESULT_SOURCE:-same run})." \
+  --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Simulator UI tests for this revision: ${test_result}." \
   --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
   echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
   exit 1

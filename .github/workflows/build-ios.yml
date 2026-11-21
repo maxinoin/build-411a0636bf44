@@ -7,12 +7,8 @@ on:
         description: Exact commit to build from the configured private repository (defaults to codex/ipa-queue)
         type: string
         required: false
-      reviewed_preview:
-        description: Reviewed private full-suite visual audit tag for this exact app commit (required for IPA)
-        type: string
-        required: false
       run_ui_tests:
-        description: Run tests here; skipped for IPA packaging when reviewed full-suite evidence is supplied
+        description: Run simulator tests on a test-only dispatch (always run for IPA delivery)
         type: boolean
         required: false
         default: true
@@ -22,40 +18,20 @@ on:
         required: false
         default: true
       allow_failed_ui_tests_for_private_candidate:
-        description: Allow a private IPA marked as a test candidate when its reviewed full-suite run failed
+        description: Allow a labeled private test candidate when the full simulator suite fails
         type: boolean
         required: false
         default: false
       test_suite:
-        description: Suite to run in this workflow; IPA delivery requires full-suite evidence from the reviewed preview
+        description: Simulator suite for test-only dispatches (IPA delivery always runs full)
         type: choice
         options: [full, sheets, picker, startup]
         default: full
-      visual_audit:
-        description: Capture screenshots with the selected suite; choose full and disable IPA delivery for an IPA-ready review
-        type: boolean
-        required: false
-        default: false
-      visual_other_sheets_only:
-        description: Limit the visual audit to bus, picker, settings and trip planner
-        type: boolean
-        required: false
-        default: false
-      visual_bus_only:
-        description: Limit the visual audit to bus sheet states
-        type: boolean
-        required: false
-        default: false
-      visual_route_only:
-        description: Capture one route sheet screenshot in dark mode
-        type: boolean
-        required: false
-        default: false
 permissions:
   contents: none
 
 concurrency:
-  group: ios-${{ github.ref }}-${{ inputs.visual_audit && 'preview' || inputs.deliver_private_ipa && 'ipa' || 'tests' }}
+  group: ios-${{ github.ref }}-${{ inputs.deliver_private_ipa && 'ipa' || 'tests' }}
   cancel-in-progress: false
 
 jobs:
@@ -67,7 +43,6 @@ jobs:
       revision: ${{ steps.resolve.outputs.revision }}
       should_build: ${{ steps.resolve.outputs.should_build }}
       auth_mode: ${{ steps.auth.outputs.auth_mode }}
-      reviewed_test_result: ${{ steps.preview_review.outputs.test_result }}
     steps:
       - name: Check out versioned workflow scripts
         shell: bash
@@ -107,18 +82,6 @@ jobs:
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/resolve-queued-revision-for-this-manual-build.sh"
 
-      - name: Require visual review and full-suite result for the exact IPA revision
-        id: preview_review
-        if: inputs.deliver_private_ipa
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
-          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          REQUESTED_REVISION: ${{ steps.resolve.outputs.revision }}
-          REVIEWED_PREVIEW: ${{ inputs.reviewed_preview }}
-          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
-        run: python3 "$RUNNER_TEMP/broker/scripts/ios/visual_review.py" verify
-
   build:
     # workflow_dispatch can target another ref; never expose secrets off main.
     needs: resolve_queue
@@ -128,9 +91,7 @@ jobs:
     env:
       IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
       IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
-      # A reviewed full-suite visual run already tested this exact source SHA.
-      # The packaging dispatch consumes that result instead of running it again.
-      RUN_UI_TESTS: ${{ inputs.visual_audit || (!inputs.deliver_private_ipa && inputs.run_ui_tests) || (inputs.deliver_private_ipa && !inputs.reviewed_preview) }}
+      RUN_UI_TESTS: ${{ inputs.deliver_private_ipa || inputs.run_ui_tests }}
       DELIVER_PRIVATE_IPA: ${{ inputs.deliver_private_ipa }}
 
     steps:
@@ -142,7 +103,7 @@ jobs:
           git -C "$RUNNER_TEMP/broker" checkout --quiet --detach FETCH_HEAD
 
       - name: Check private-release delivery configuration
-        if: env.DELIVER_PRIVATE_IPA == 'true' || inputs.visual_audit
+        if: env.DELIVER_PRIVATE_IPA == 'true'
         shell: bash
         env:
           APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
@@ -208,8 +169,6 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/dependency-cache.sh" save
 
       - name: Run independent Swift contracts
-        id: contracts
-        if: ${{ !(inputs.deliver_private_ipa && inputs.reviewed_preview) && (!inputs.visual_audit || inputs.test_suite == 'full') }}
         shell: bash
         run: bash "$RUNNER_TEMP/broker/scripts/ios/contracts.sh"
 
@@ -217,37 +176,29 @@ jobs:
         id: simulator-tests
         if: env.RUN_UI_TESTS == 'true'
         continue-on-error: true
-        timeout-minutes: ${{ inputs.visual_route_only && 20 || 45 }}
+        timeout-minutes: 45
         shell: bash
         env:
           TEST_SUITE: ${{ inputs.deliver_private_ipa && 'full' || inputs.test_suite }}
-          VISUAL_AUDIT: ${{ inputs.visual_audit && !inputs.deliver_private_ipa }}
-          VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
-          VISUAL_BUS_ONLY: ${{ inputs.visual_bus_only }}
-          VISUAL_ROUTE_ONLY: ${{ inputs.visual_route_only }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/run-ios-simulator-ui-tests.sh"
 
-      - name: Authorize IPA packaging from passing test evidence
+      - name: Authorize IPA packaging from this run's simulator result
         id: ipa-test-gate
         if: env.DELIVER_PRIVATE_IPA == 'true'
         shell: bash
         env:
           CURRENT_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
-          REVIEWED_TEST_RESULT: ${{ needs.resolve_queue.outputs.reviewed_test_result }}
+          SIMULATOR_SUITE_RAN: ${{ steps.simulator-tests.outputs.suite_ran }}
           ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
         run: |
-          result="$CURRENT_TEST_RESULT"
-          source="this run"
-          if [[ "$result" == skipped ]]; then
-            result="$REVIEWED_TEST_RESULT"
-            source="reviewed full-suite run"
+          if [[ "$SIMULATOR_SUITE_RAN" != true ]]; then
+            echo "::error title=IPA packaging blocked::No simulator test result bundle was produced."
+            exit 1
           fi
-          if [[ "$result" == success ]]; then
+          if [[ "$CURRENT_TEST_RESULT" == success ]]; then
             echo "test_result=success" >> "$GITHUB_OUTPUT"
-            echo "test_result_source=$source" >> "$GITHUB_OUTPUT"
-          elif [[ "$result" == failure && "$ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE" == true ]]; then
+          elif [[ "$CURRENT_TEST_RESULT" == failure && "$ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE" == true ]]; then
             echo "test_result=failure" >> "$GITHUB_OUTPUT"
-            echo "test_result_source=$source" >> "$GITHUB_OUTPUT"
             echo "::warning title=Private test candidate::The IPA will be labeled as a test candidate because the full simulator suite failed."
           else
             echo "::error title=IPA packaging blocked::A passing full simulator suite is required unless the private test-candidate option is enabled."
@@ -263,7 +214,7 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
       - name: Upload filtered build diagnostics privately
-        if: (failure() || steps.simulator-tests.outcome == 'failure') && !inputs.visual_audit
+        if: failure() || steps.simulator-tests.outcome == 'failure'
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
@@ -279,32 +230,10 @@ jobs:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           SIMULATOR_TEST_RESULT: ${{ steps.ipa-test-gate.outputs.test_result }}
-          SIMULATOR_TEST_RESULT_SOURCE: ${{ steps.ipa-test-gate.outputs.test_result_source }}
           ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
 
-      - name: Upload visual audit privately
-        if: always() && inputs.visual_audit && steps.simulator-tests.outcome != 'skipped'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
-          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          TEST_SUITE: ${{ inputs.deliver_private_ipa && 'full' || inputs.test_suite }}
-          TEST_RUN_MODE: ${{ steps.simulator-tests.outputs.test_run_mode }}
-          SIMULATOR_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
-          CONTRACT_RESULT: ${{ steps.contracts.outcome }}
-          VISUAL_AUDIT: ${{ inputs.visual_audit }}
-          VISUAL_OTHER_SHEETS_ONLY: ${{ inputs.visual_other_sheets_only }}
-          VISUAL_BUS_ONLY: ${{ inputs.visual_bus_only }}
-          VISUAL_ROUTE_ONLY: ${{ inputs.visual_route_only }}
-        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-visual-audit-privately.sh"
-
-      - name: Report failed tests in the private visual audit
-        if: always() && inputs.visual_audit && steps.simulator-tests.outcome == 'failure'
-        shell: bash
-        run: echo "::warning title=Visual audit test failures::The private capture includes screenshots, but the simulator suite did not pass. It cannot authorize a normal IPA build."
-
       - name: Report simulator test failure after private delivery
-        if: always() && steps.simulator-tests.outcome == 'failure' && !inputs.visual_audit
+        if: always() && steps.simulator-tests.outcome == 'failure'
         shell: bash
         run: bash "$RUNNER_TEMP/broker/scripts/ios/report-simulator-test-failure-after-private-delivery.sh"
