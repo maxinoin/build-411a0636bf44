@@ -12,14 +12,14 @@ import sys
 source = pathlib.Path(sys.argv[1])
 output = pathlib.Path(sys.argv[2])
 lines = source.read_text(errors="replace").splitlines() if source.exists() else []
-pattern = re.compile(r"(?:\.swift:\d+:\d+:\s+error:|(?:^|\s)error:|\*\* BUILD FAILED \*\*)")
+pattern = re.compile(r"(?:\.swift:\d+:\d+:\s+error:|(?:^|\s)xcodebuild:\s+error:|^\s*error:|\*\* BUILD FAILED \*\*)")
 selected = [re.sub(r"^.*?/private-source/", "private-source/", line) for line in lines if pattern.search(line)]
 test_log = pathlib.Path(str(source).replace("xcodebuild.log", "xcode-test.log"))
 test_lines = test_log.read_text(errors="replace").splitlines() if test_log.exists() else []
 # The simulator runner records both build-for-testing and test-without-building
 # output in xcode-test.log. Include actionable compiler/command failures only.
 command_error_pattern = re.compile(
-    r"(?:\.swift:\d+:\d+:\s+(?:fatal )?error:|(?:^|\s)error:|"
+    r"(?:\.swift:\d+:\d+:\s+(?:fatal )?error:|(?:^|\s)xcodebuild:\s+error:|^\s*error:|"
     r"\*\* (?:BUILD|TEST) FAILED \*\*)",
     re.IGNORECASE,
 )
