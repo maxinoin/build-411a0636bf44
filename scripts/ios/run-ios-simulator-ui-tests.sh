@@ -12,6 +12,11 @@ case "${TEST_SUITE:-full}" in
   sheets) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests) ;;
   picker) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/RoutePickerTransitionTests) ;;
   startup) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/StartupTests) ;;
+  map) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/MapInteractionTests) ;;
+  gestures)
+    xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureTests
+      -only-testing:KnightRouteSheetUITests/SettingsDismissalTests) ;;
+  ownership) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests) ;;
   *) echo "::error::Unknown test suite"; exit 1 ;;
 esac
 test_allowance=180
