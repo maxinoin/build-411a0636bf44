@@ -16,6 +16,17 @@ pattern = re.compile(r"(?:\.swift:\d+:\d+:\s+error:|(?:^|\s)error:|\*\* BUILD FA
 selected = [re.sub(r"^.*?/private-source/", "private-source/", line) for line in lines if pattern.search(line)]
 test_log = pathlib.Path(str(source).replace("xcodebuild.log", "xcode-test.log"))
 test_lines = test_log.read_text(errors="replace").splitlines() if test_log.exists() else []
+# The simulator runner records both build-for-testing and test-without-building
+# output in xcode-test.log. Include actionable compiler/command failures only.
+command_error_pattern = re.compile(
+    r"(?:\.swift:\d+:\d+:\s+(?:fatal )?error:|(?:^|\s)error:|"
+    r"\*\* (?:BUILD|TEST) FAILED \*\*)",
+    re.IGNORECASE,
+)
+simulator_diagnostics = [
+    "Simulator build/test: " + re.sub(r"^.*?/private-source/", "private-source/", line)[:800]
+    for line in test_lines if command_error_pattern.search(line)
+]
 test_pattern = re.compile(
     r"(?:Test Case .*\bfailed\b|Test Suite .*\bfailed\b|"
     r"Failing tests:|Executed \d+ tests?|Testing failed|"
@@ -26,7 +37,12 @@ test_details = [
     re.sub(r"^.*?/private-source/", "private-source/", line)[:800]
     for line in test_lines if test_pattern.search(line)
 ]
-report = selected or ["No compiler diagnostic lines matched; full build logs stayed on the ephemeral runner."]
+report = selected[:]
+if simulator_diagnostics:
+    report.append("Simulator build/test diagnostics:")
+    report.extend(simulator_diagnostics[:80])
+if not report:
+    report.append("No compiler diagnostic lines matched; full build logs stayed on the ephemeral runner.")
 report.append("")
 report.append("UI test failure summary:")
 report.extend(test_details[:80])
