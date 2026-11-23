@@ -24,7 +24,7 @@ case "${TEST_SHARD:-focused}" in
         xcodebuild_test_args+=(
           -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testMapBackdropTapDismissesRoutePicker
           -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testRouteArrivalRowLimitIsConfigurable
-          -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testSelectingStopFromFullRouteSheetUsesStableSmallerSheet
+          -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testSelectingStopFromFullRouteSheetSizesToMeasuredContent
         )
         test_workers=1
         test_parallel=NO ;;
