@@ -8,7 +8,7 @@ on:
         type: string
         required: false
       run_ui_tests:
-        description: Run simulator tests on a test-only dispatch (always run for IPA delivery)
+        description: Run the full simulator suite before IPA delivery. Set false to build a private IPA for manual device testing without running tests.
         type: boolean
         required: false
         default: true
@@ -85,7 +85,7 @@ jobs:
   full_test_map:
     name: UI tests (map)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     uses: ./.github/workflows/ios-ui-test-shard.yml
     with:
       private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
@@ -106,7 +106,7 @@ jobs:
   full_test_visuals:
     name: UI tests (sheet visuals)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     uses: ./.github/workflows/ios-ui-test-shard.yml
     with:
       private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
@@ -127,7 +127,7 @@ jobs:
   full_test_ownership:
     name: UI tests (sheet ownership)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     uses: ./.github/workflows/ios-ui-test-shard.yml
     with:
       private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
@@ -148,7 +148,7 @@ jobs:
   full_test_gestures:
     name: UI tests (gestures and settings)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     uses: ./.github/workflows/ios-ui-test-shard.yml
     with:
       private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
@@ -169,7 +169,7 @@ jobs:
   full_test_startup_picker:
     name: UI tests (startup and route picker)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     uses: ./.github/workflows/ios-ui-test-shard.yml
     with:
       private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
@@ -231,7 +231,7 @@ jobs:
 
   full_test_gate:
     name: Require all full-suite shards to pass
-    if: always() && github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    if: always() && github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.run_ui_tests && (inputs.deliver_private_ipa || inputs.test_suite == 'full')
     needs:
       - resolve_queue
       - full_test_map
@@ -285,9 +285,9 @@ jobs:
           fi
 
   package_ipa:
-    name: Package IPA after full-suite gate
+    name: Package private IPA
     needs: [resolve_queue, full_test_gate]
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.deliver_private_ipa && needs.full_test_gate.result == 'success'
+    if: always() && github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.deliver_private_ipa && (inputs.run_ui_tests == false || needs.full_test_gate.result == 'success')
     runs-on: macos-26
     timeout-minutes: 55
     env:
