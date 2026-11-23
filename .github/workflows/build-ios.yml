@@ -82,18 +82,217 @@ jobs:
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/resolve-queued-revision-for-this-manual-build.sh"
 
-  build:
-    # workflow_dispatch can target another ref; never expose secrets off main.
+  full_test_map:
+    name: UI tests (map)
     needs: resolve_queue
-    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true'
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: map
+      test_suite: full
+      run_ui_tests: true
+      run_contracts: true
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  full_test_visuals:
+    name: UI tests (sheet visuals)
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: visuals
+      test_suite: full
+      run_ui_tests: true
+      run_contracts: false
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  full_test_ownership:
+    name: UI tests (sheet ownership)
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: ownership
+      test_suite: full
+      run_ui_tests: true
+      run_contracts: false
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  full_test_gestures:
+    name: UI tests (gestures and settings)
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: gestures
+      test_suite: full
+      run_ui_tests: true
+      run_contracts: false
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  full_test_startup_picker:
+    name: UI tests (startup and route picker)
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: startup-picker
+      test_suite: full
+      run_ui_tests: true
+      run_contracts: false
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  focused_tests:
+    name: Focused UI tests
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && !inputs.deliver_private_ipa && inputs.run_ui_tests && inputs.test_suite != 'full'
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: focused
+      test_suite: ${{ inputs.test_suite }}
+      run_ui_tests: true
+      run_contracts: true
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  contracts_only:
+    name: Swift contracts only
+    needs: resolve_queue
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && !inputs.deliver_private_ipa && !inputs.run_ui_tests
+    uses: ./.github/workflows/ios-ui-test-shard.yml
+    with:
+      private_source_sha: ${{ needs.resolve_queue.outputs.revision }}
+      app_client_id: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
+      auth_mode: ${{ needs.resolve_queue.outputs.auth_mode }}
+      shard: contracts-only
+      test_suite: full
+      run_ui_tests: false
+      run_contracts: true
+    secrets:
+      private_source_repository: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+      ios_project_directory: ${{ secrets.IOS_PROJECT_DIRECTORY }}
+      ios_scheme: ${{ secrets.IOS_SCHEME }}
+      private_source_github_app_private_key: ${{ secrets.PRIVATE_SOURCE_GITHUB_APP_PRIVATE_KEY }}
+      private_source_read_token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+      private_ipa_upload_token: ${{ secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+
+  full_test_gate:
+    name: Require all full-suite shards to pass
+    if: always() && github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && (inputs.deliver_private_ipa || (inputs.run_ui_tests && inputs.test_suite == 'full'))
+    needs:
+      - resolve_queue
+      - full_test_map
+      - full_test_visuals
+      - full_test_ownership
+      - full_test_gestures
+      - full_test_startup_picker
+    runs-on: ubuntu-latest
+    outputs:
+      test_result: ${{ steps.gate.outputs.test_result }}
+    steps:
+      - name: Verify every shard ran and authorize delivery
+        id: gate
+        shell: bash
+        env:
+          DELIVER_PRIVATE_IPA: ${{ inputs.deliver_private_ipa }}
+          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
+          MAP_RAN: ${{ needs.full_test_map.outputs.suite_ran }}
+          MAP_RESULT: ${{ needs.full_test_map.outputs.test_outcome }}
+          VISUALS_RAN: ${{ needs.full_test_visuals.outputs.suite_ran }}
+          VISUALS_RESULT: ${{ needs.full_test_visuals.outputs.test_outcome }}
+          OWNERSHIP_RAN: ${{ needs.full_test_ownership.outputs.suite_ran }}
+          OWNERSHIP_RESULT: ${{ needs.full_test_ownership.outputs.test_outcome }}
+          GESTURES_RAN: ${{ needs.full_test_gestures.outputs.suite_ran }}
+          GESTURES_RESULT: ${{ needs.full_test_gestures.outputs.test_outcome }}
+          STARTUP_PICKER_RAN: ${{ needs.full_test_startup_picker.outputs.suite_ran }}
+          STARTUP_PICKER_RESULT: ${{ needs.full_test_startup_picker.outputs.test_outcome }}
+        run: |
+          for shard in MAP VISUALS OWNERSHIP GESTURES STARTUP_PICKER; do
+            ran_var="${shard}_RAN"
+            if [[ "${!ran_var}" != true ]]; then
+              echo "::error title=Simulator suite incomplete::$shard did not produce a test result."
+              exit 1
+            fi
+          done
+          failed=false
+          for shard in MAP VISUALS OWNERSHIP GESTURES STARTUP_PICKER; do
+            result_var="${shard}_RESULT"
+            if [[ "${!result_var}" != success ]]; then failed=true; fi
+          done
+          if [[ "$failed" == true ]]; then
+            if [[ "$DELIVER_PRIVATE_IPA" == true && "$ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE" == true ]]; then
+              echo "test_result=failure" >> "$GITHUB_OUTPUT"
+              echo "::warning title=Private test candidate::At least one full-suite shard failed; the IPA will be labeled as a test candidate."
+            else
+              echo "::error title=Simulator test gate failed::All five full-suite shards must pass."
+              exit 1
+            fi
+          else
+            echo "test_result=success" >> "$GITHUB_OUTPUT"
+          fi
+
+  package_ipa:
+    name: Package IPA after full-suite gate
+    needs: [resolve_queue, full_test_gate]
+    if: github.ref == 'refs/heads/main' && needs.resolve_queue.outputs.should_build == 'true' && inputs.deliver_private_ipa && needs.full_test_gate.result == 'success'
     runs-on: macos-26
     timeout-minutes: 55
     env:
       IOS_PROJECT_DIRECTORY: ${{ secrets.IOS_PROJECT_DIRECTORY }}
       IOS_SCHEME: ${{ secrets.IOS_SCHEME }}
-      RUN_UI_TESTS: ${{ inputs.deliver_private_ipa || inputs.run_ui_tests }}
-      DELIVER_PRIVATE_IPA: ${{ inputs.deliver_private_ipa }}
-
     steps:
       - name: Check out versioned workflow scripts
         shell: bash
@@ -103,7 +302,6 @@ jobs:
           git -C "$RUNNER_TEMP/broker" checkout --quiet --detach FETCH_HEAD
 
       - name: Check private-release delivery configuration
-        if: env.DELIVER_PRIVATE_IPA == 'true'
         shell: bash
         env:
           APP_CLIENT_ID: ${{ vars.PRIVATE_SOURCE_GITHUB_APP_CLIENT_ID }}
@@ -133,8 +331,7 @@ jobs:
           repositories: KnightRoute
           permission-contents: write
 
-      - name: Check out private source with a read-only token
-        id: private-source
+      - name: Check out exact private source revision
         shell: bash
         env:
           REQUESTED_REVISION: ${{ needs.resolve_queue.outputs.revision }}
@@ -155,85 +352,38 @@ jobs:
         run: bash "$RUNNER_TEMP/broker/scripts/ios/dependency-cache.sh" restore
 
       - name: Generate Xcode project and resolve pinned packages
-        id: package-resolution
         shell: bash
         run: bash "$RUNNER_TEMP/broker/scripts/ios/generate-xcode-project-and-resolve-pinned-packages.sh"
 
-      - name: Save private dependency cache
-        timeout-minutes: 5
-        shell: bash
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
-          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-        run: bash "$RUNNER_TEMP/broker/scripts/ios/dependency-cache.sh" save
-
-      - name: Run independent Swift contracts
-        shell: bash
-        run: bash "$RUNNER_TEMP/broker/scripts/ios/contracts.sh"
-
-      - name: Run iOS Simulator UI tests
-        id: simulator-tests
-        if: env.RUN_UI_TESTS == 'true'
-        continue-on-error: true
-        timeout-minutes: 45
-        shell: bash
-        env:
-          TEST_SUITE: ${{ inputs.deliver_private_ipa && 'full' || inputs.test_suite }}
-        run: bash "$RUNNER_TEMP/broker/scripts/ios/run-ios-simulator-ui-tests.sh"
-
-      - name: Authorize IPA packaging from this run's simulator result
-        id: ipa-test-gate
-        if: env.DELIVER_PRIVATE_IPA == 'true'
-        shell: bash
-        env:
-          CURRENT_TEST_RESULT: ${{ steps.simulator-tests.outcome }}
-          SIMULATOR_SUITE_RAN: ${{ steps.simulator-tests.outputs.suite_ran }}
-          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
-        run: |
-          if [[ "$SIMULATOR_SUITE_RAN" != true ]]; then
-            echo "::error title=IPA packaging blocked::No simulator test result bundle was produced."
-            exit 1
-          fi
-          if [[ "$CURRENT_TEST_RESULT" == success ]]; then
-            echo "test_result=success" >> "$GITHUB_OUTPUT"
-          elif [[ "$CURRENT_TEST_RESULT" == failure && "$ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE" == true ]]; then
-            echo "test_result=failure" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Private test candidate::The IPA will be labeled as a test candidate because the full simulator suite failed."
-          else
-            echo "::error title=IPA packaging blocked::A passing full simulator suite is required unless the private test-candidate option is enabled."
-            exit 1
-          fi
-
       - name: Build and package unsigned arm64 IPA
-        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.ipa-test-gate.outcome == 'success'
+        id: package
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
           SENTRY_ENVIRONMENT: production
         run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
+      - name: Upload IPA to a private release
+        id: private-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
+          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          SIMULATOR_TEST_RESULT: ${{ needs.full_test_gate.outputs.test_result }}
+          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
+        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
+
       - name: Upload filtered build diagnostics privately
-        if: failure() || steps.simulator-tests.outcome == 'failure'
+        if: failure()
         shell: bash
         env:
           GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           XCRESULT_BUNDLE: ${{ runner.temp }}/ios-ui-tests.xcresult
+          MATRIX_SHARD: package
         run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-filtered-build-diagnostics-privately.sh"
 
-      - name: Upload IPA to a private release
-        id: private-release
-        if: env.DELIVER_PRIVATE_IPA == 'true' && steps.ipa-test-gate.outcome == 'success'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ needs.resolve_queue.outputs.auth_mode == 'app' && steps.upload_app_token.outputs.token || secrets.PRIVATE_IPA_UPLOAD_TOKEN }}
-          PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          SIMULATOR_TEST_RESULT: ${{ steps.ipa-test-gate.outputs.test_result }}
-          ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
-        run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
-
-      - name: Report simulator test failure after private delivery
-        if: always() && steps.simulator-tests.outcome == 'failure'
+      - name: Report failed simulator tests after candidate delivery
+        if: always() && needs.full_test_gate.outputs.test_result == 'failure'
         shell: bash
         run: bash "$RUNNER_TEMP/broker/scripts/ios/report-simulator-test-failure-after-private-delivery.sh"

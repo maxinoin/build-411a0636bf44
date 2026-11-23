@@ -7,17 +7,32 @@ simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,
 }
 
 xcodebuild_test_args=(test)
-case "${TEST_SUITE:-full}" in
-  full) ;;
-  sheets) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests) ;;
-  picker) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/RoutePickerTransitionTests) ;;
-  startup) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/StartupTests) ;;
-  map) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/MapInteractionTests) ;;
+test_workers=2
+test_parallel=YES
+case "${TEST_SHARD:-focused}" in
+  focused)
+    case "${TEST_SUITE:-full}" in
+      full) ;;
+      sheets) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests) ;;
+      picker) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/RoutePickerTransitionTests) ;;
+      startup) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/StartupTests) ;;
+      map) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/MapInteractionTests) ;;
+      gestures)
+        xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureTests
+          -only-testing:KnightRouteSheetUITests/SettingsDismissalTests) ;;
+      ownership) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests) ;;
+      *) echo "::error::Unknown focused test suite"; exit 1 ;;
+    esac ;;
+  map) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/MapInteractionTests); test_workers=1; test_parallel=NO ;;
+  visuals) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetStateVisualTests); test_workers=1; test_parallel=NO ;;
+  ownership) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests); test_workers=1; test_parallel=NO ;;
   gestures)
     xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureTests
-      -only-testing:KnightRouteSheetUITests/SettingsDismissalTests) ;;
-  ownership) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests) ;;
-  *) echo "::error::Unknown test suite"; exit 1 ;;
+      -only-testing:KnightRouteSheetUITests/SettingsDismissalTests); test_workers=1; test_parallel=NO ;;
+  startup-picker)
+    xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/StartupTests
+      -only-testing:KnightRouteSheetUITests/RoutePickerTransitionTests); test_workers=1; test_parallel=NO ;;
+  *) echo "::error::Unknown simulator test shard"; exit 1 ;;
 esac
 test_allowance=180
 test_maximum=240
@@ -37,7 +52,8 @@ build_status=$?
 if [[ "$build_status" -ne 0 ]]; then exit "$build_status"; fi
 xcodebuild_test_args[0]=test-without-building
 echo "Running tests using compiled simulator products."
-# Use two cloned iPhone simulators to shorten UI runs without saturating the hosted Mac.
+# Focused runs use two local workers. Full-suite shards run one worker each
+# because the workflow spreads them across five independent Mac runners.
 xcodebuild "${xcodebuild_test_args[@]}" \
   -project "$source_dir/$IOS_SCHEME.xcodeproj" \
   -scheme "$IOS_SCHEME" \
@@ -46,8 +62,8 @@ xcodebuild "${xcodebuild_test_args[@]}" \
   -derivedDataPath "$RUNNER_TEMP/ios-derived" \
   -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
   -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
-  -parallel-testing-enabled YES \
-  -parallel-testing-worker-count 2 \
+  -parallel-testing-enabled "$test_parallel" \
+  -parallel-testing-worker-count "$test_workers" \
   -test-timeouts-enabled YES \
   -default-test-execution-time-allowance "$test_allowance" \
   -maximum-test-execution-time-allowance "$test_maximum" \
