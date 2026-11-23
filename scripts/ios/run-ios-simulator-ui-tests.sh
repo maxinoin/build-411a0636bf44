@@ -37,6 +37,7 @@ build_status=$?
 if [[ "$build_status" -ne 0 ]]; then exit "$build_status"; fi
 xcodebuild_test_args[0]=test-without-building
 echo "Running tests using compiled simulator products."
+# Use two cloned iPhone simulators to shorten UI runs without saturating the hosted Mac.
 xcodebuild "${xcodebuild_test_args[@]}" \
   -project "$source_dir/$IOS_SCHEME.xcodeproj" \
   -scheme "$IOS_SCHEME" \
@@ -45,7 +46,8 @@ xcodebuild "${xcodebuild_test_args[@]}" \
   -derivedDataPath "$RUNNER_TEMP/ios-derived" \
   -clonedSourcePackagesDirPath "$RUNNER_TEMP/ios-source-packages" \
   -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
-  -parallel-testing-enabled NO \
+  -parallel-testing-enabled YES \
+  -parallel-testing-worker-count 2 \
   -test-timeouts-enabled YES \
   -default-test-execution-time-allowance "$test_allowance" \
   -maximum-test-execution-time-allowance "$test_maximum" \
