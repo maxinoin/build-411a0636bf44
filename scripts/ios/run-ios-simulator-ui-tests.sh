@@ -20,7 +20,20 @@ case "${TEST_SHARD:-focused}" in
       gestures)
         xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureTests
           -only-testing:KnightRouteSheetUITests/SettingsDismissalTests) ;;
-      ownership) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests) ;;
+      ownership-check)
+        xcodebuild_test_args+=(
+          -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testMapBackdropTapDismissesRoutePicker
+          -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testRouteArrivalRowLimitIsConfigurable
+          -only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests/testSelectingStopFromFullRouteSheetUsesStableSmallerSheet
+        )
+        test_workers=1
+        test_parallel=NO ;;
+      ownership)
+        xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/SheetGestureOwnershipTests)
+        # This focused suite exercises MapKit gestures. Running cloned app
+        # launches in parallel has caused simulator launch-progress timeouts.
+        test_workers=1
+        test_parallel=NO ;;
       *) echo "::error::Unknown focused test suite"; exit 1 ;;
     esac ;;
   map) xcodebuild_test_args+=(-only-testing:KnightRouteSheetUITests/MapInteractionTests); test_workers=1; test_parallel=NO ;;
@@ -52,8 +65,9 @@ build_status=$?
 if [[ "$build_status" -ne 0 ]]; then exit "$build_status"; fi
 xcodebuild_test_args[0]=test-without-building
 echo "Running tests using compiled simulator products."
-# Focused runs use two local workers. Full-suite shards run one worker each
-# because the workflow spreads them across five independent Mac runners.
+# Full-suite shards run one worker each because the workflow spreads them
+# across five independent Mac runners. The focused ownership suite also uses
+# one local worker because its MapKit gestures are unstable across clones.
 xcodebuild "${xcodebuild_test_args[@]}" \
   -project "$source_dir/$IOS_SCHEME.xcodeproj" \
   -scheme "$IOS_SCHEME" \

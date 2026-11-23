@@ -25,7 +25,7 @@ on:
       test_suite:
         description: Simulator suite for test-only dispatches (IPA delivery always runs full)
         type: choice
-        options: [full, sheets, picker, startup, map, gestures, ownership]
+        options: [full, sheets, picker, startup, map, gestures, ownership, ownership-check]
         default: full
 permissions:
   contents: none
