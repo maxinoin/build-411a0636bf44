@@ -5,11 +5,11 @@ All builds are manual. The public broker reads the private shared `codex/ipa-que
 | Operation | Inputs | Validation |
 | --- | --- | --- |
 | Swift contracts only | deliver_private_ipa=false, run_ui_tests=false | Independent Swift checks in parallel |
-| Focused tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=picker, sheets or startup | Swift contracts plus selected simulator tests |
-| Full tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=full | Swift contracts plus full simulator suite |
-| IPA | deliver_private_ipa=true | Swift contracts and the full simulator suite run on the source being packaged |
+| Focused tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=picker, sheets, startup, map, gestures or ownership | Swift contracts plus selected simulator tests |
+| Full tests | deliver_private_ipa=false, run_ui_tests=true, test_suite=full | Five parallel macOS shards; all five must pass |
+| IPA | deliver_private_ipa=true | Five parallel macOS shards; packaging starts only after the full suite passes |
 
-Scripts live in `scripts/ios`. Each run checks out the exact public workflow revision. Simulator test products are compiled once and reused by test-without-building. UI tests run on two cloned simulators in parallel. Device Release products require a separate compilation.
+Scripts live in `scripts/ios`. Each run checks out the exact public workflow revision. The full suite splits into map, sheet visuals, gesture ownership, gestures/settings, and startup/route picker shards. Each shard runs on its own Mac runner with one simulator; focused suites use one Mac runner with two simulator workers. Device Release products require a separate compilation.
 
 Dependency cache assets live exclusively in private KnightRoute prereleases tagged `ios-dependencies-v1-*`. Keys include the project specification, Xcode version, architecture and cache schema. Only downloaded Swift packages are cached; app source, credentials, data and DerivedData are excluded. Delete these private cache releases to clear the cache. Missing caches resolve dependencies normally. Saving a cache is best effort; tests and builds still decide success.
 
