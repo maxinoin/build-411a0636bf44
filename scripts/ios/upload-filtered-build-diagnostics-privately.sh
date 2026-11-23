@@ -98,8 +98,7 @@ if ! destination_private="$(gh api "repos/$PRIVATE_SOURCE_REPOSITORY" --jq '.pri
   echo "::error title=Private diagnostics blocked::The destination could not be verified as private."
   exit 1
 fi
-shard_suffix="${MATRIX_SHARD:-single}"
-release_tag="ios-build-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${shard_suffix}"
+release_tag="ios-build-diagnostics-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 files=("$diagnostics")
 for contract_log in "$RUNNER_TEMP"/contract-*.log; do
   [[ -f "$contract_log" ]] && files+=("$contract_log")
@@ -108,7 +107,7 @@ if ! gh release create "$release_tag" "${files[@]}" \
   --repo "$PRIVATE_SOURCE_REPOSITORY" \
   --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
   --latest=false \
-  --title "Private iOS build diagnostics ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} (${shard_suffix})" \
+  --title "Private iOS build diagnostics ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
   --notes "Filtered compiler and XCTest failure details from the private iOS build. Full source and test logs were not uploaded." \
   --prerelease >"$RUNNER_TEMP/private-diagnostics-upload.log" 2>&1; then
   echo "::error title=Private diagnostics upload failed::Could not upload filtered diagnostics."
