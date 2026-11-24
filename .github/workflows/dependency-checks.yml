@@ -1,0 +1,31 @@
+name: Dependency checks
+
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-checks
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event.repository.default_branch == github.ref_name
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check eligible dependency updates
+        env:
+          SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
+          READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RECHECK: ${{ github.event_name == 'workflow_dispatch' }}
+        run: python3 scripts/check-dependency-prs.py
