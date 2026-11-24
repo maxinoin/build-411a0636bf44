@@ -16,3 +16,6 @@ private-source/
 *.xcresult/
 SourcePackages/
 *-private-setup/
+
+__pycache__/
+*.py[cod]

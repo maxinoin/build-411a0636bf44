@@ -21,3 +21,31 @@ Test-only and IPA operations use separate concurrency groups. Backend checks sta
 One dispatch builds an unsigned IPA for a private release. Choose `sheet_style` to build the accent-rail/gray-divider or colored-divider-only variant. Set `run_ui_tests=false` when creating an IPA for manual testing; the release records that simulator UI tests were skipped. The `private_source_sha` input optionally selects a specific commit. With the input empty, the broker resolves the current queue commit.
 
 A failed simulator suite blocks normal IPA delivery. To request a private candidate after a failed full-suite run, explicitly enable `allow_failed_ui_tests_for_private_candidate`. The release title identifies the candidate and the run still reports the test failure. Swift contract failures and missing simulator results block packaging.
+
+
+## Dependency maintenance
+
+The dependency broker supports runtime, training and development locks. It
+resolves related locks inside a credential-free, manifest-only uv container,
+then updates only those locks on authenticated same-repository Dependabot PRs.
+Set DEPENDENCY_UPDATE_TOKEN in this broker's Actions secrets with Contents
+read/write on the private source repository only. The existing read/status
+credentials retain their separate roles. No code calls the merge API.
+Contents write is a repository-wide GitHub permission; trusted code restricts
+writes to generated lockfiles on validated Dependabot branches. Restrict broker
+write access because its maintainers can edit the workflow that uses the token.
+
+Every three hours the broker checks new dependency PR commits; once per UTC day
+it also audits main against current Python/npm advisory databases. Failures and
+new advisories notify the configured Discord user/channel. Missing Copilot
+reviews no longer block a passed-check review reminder. Notifications describe
+AI review as pending where appropriate. Public output remains generic.
+
+Merge this broker update before the private dependency split. It accepts legacy
+branches without the new locks. Lock resolution is limited to registry packages
+and allowlisted requirements includes; private PR scripts are never executed
+with writer credentials. Missing writer permission is reported as a failed lock
+refresh whenever related locks need a commit. Do not reuse release credentials.
+
+Local regression check: `python -m unittest discover -s tests -v`.
+Docker-based integration checks require Docker/WSL and are a separate gate.
