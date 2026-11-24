@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '23 */3 * * *'
   workflow_dispatch:
+    inputs:
+      test_webhook:
+        description: Send one Discord test message and skip dependency checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -21,7 +27,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Send Discord webhook test
+        if: inputs.test_webhook == true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python3 scripts/check-dependency-prs.py --test-discord
       - name: Check eligible dependency updates
+        if: inputs.test_webhook != true
         env:
           SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}

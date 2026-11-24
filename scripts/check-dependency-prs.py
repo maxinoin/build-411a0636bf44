@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from urllib.error import HTTPError
@@ -162,7 +163,7 @@ def current_copilot_review(repository, reader, number, sha):
     )
 
 
-def discord_alert(webhook, repository, number, sha, check_state, review_state=None):
+def post_discord(webhook, message):
     parsed = urlsplit(webhook)
     if (
         parsed.scheme != "https"
@@ -175,6 +176,28 @@ def discord_alert(webhook, repository, number, sha, check_state, review_state=No
         or not re.fullmatch(r"/api/webhooks/[0-9]+/[A-Za-z0-9._-]+/?", parsed.path)
     ):
         raise ValueError("Discord webhook URL is invalid")
+    payload = json.dumps({
+        "content": message,
+        "allowed_mentions": {"parse": []},
+    }).encode()
+    request = Request(
+        webhook, data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "KnightRoute-Dependency-Alerts"},
+    )
+    with build_opener(NoRedirect()).open(request, timeout=20) as response:
+        if response.status not in {200, 204}:
+            raise RuntimeError("Discord webhook returned an unexpected status")
+
+
+def discord_test(webhook):
+    post_discord(
+        webhook,
+        "✅ KnightRoute webhook test: delivery is working. This was a test; "
+        "no dependency checks or PR changes were run.",
+    )
+
+
+def discord_alert(webhook, repository, number, sha, check_state, review_state=None):
     url = f"https://github.com/{repository}/pull/{number}"
     if check_state == "failure":
         message = (
@@ -189,17 +212,7 @@ def discord_alert(webhook, repository, number, sha, check_state, review_state=No
             f"decide whether to merge; nothing was merged: <{url}>"
         )
         description = "Discord alert sent: checks and Copilot review complete"
-    payload = json.dumps({
-        "content": message,
-        "allowed_mentions": {"parse": []},
-    }).encode()
-    request = Request(
-        webhook, data=payload,
-        headers={"Content-Type": "application/json", "User-Agent": "KnightRoute-Dependency-Alerts"},
-    )
-    with build_opener(NoRedirect()).open(request, timeout=20) as response:
-        if response.status not in {200, 204}:
-            raise RuntimeError("Discord webhook returned an unexpected status")
+    post_discord(webhook, message)
     return description
 
 
@@ -324,6 +337,13 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if sys.argv[1:] == ["--test-discord"]:
+            webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+            if not webhook:
+                raise RuntimeError("Discord webhook is not configured")
+            discord_test(webhook)
+            print("Discord webhook test delivered.")
+            raise SystemExit(0)
         raise SystemExit(main())
     except Exception as error:
         # Public runs must not print private endpoint URLs or exception payloads.
