@@ -24,6 +24,13 @@ def pr():
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_manifest_containers_run_as_the_directory_owner(self):
+        with patch.object(m.os, "getuid", return_value=1001, create=True), patch.object(m.os, "getgid", return_value=1002, create=True):
+            options = m.owner_options()
+        self.assertEqual(options[:2], ["--user", "1001:1002"])
+        self.assertIn("HOME=/tmp", options)
+        self.assertIn("UV_CACHE_DIR=/tmp/uv-cache", options)
+
     def test_registry_markers_and_allowlisted_includes(self):
         m.validate_manifest("-r requirements.in\n-c requirements.lock\nuvicorn[standard]>=0.34,<1\nuvloop==0.23 ; sys_platform != 'win32'\n")
 

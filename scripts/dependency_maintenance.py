@@ -16,6 +16,13 @@ INPUTS = ("requirements.in", "requirements-training.in", "requirements-dev.in")
 RESOLVER = "ghcr.io/astral-sh/uv:0.13.9-python3.12-bookworm-slim"
 
 
+def owner_options():
+    # mkdtemp creates a 0700 directory owned by the runner. A root container
+    # with ALL capabilities dropped cannot bypass that directory's ownership.
+    user = ["--user", f"{os.getuid()}:{os.getgid()}"] if hasattr(os, "getuid") else []
+    return [*user, "--env", "HOME=/tmp", "--env", "UV_CACHE_DIR=/tmp/uv-cache"]
+
+
 def broker():
     # Imported by the entrypoint as __main__, and by tests under its file name.
     import sys
@@ -74,6 +81,7 @@ def resolve(files, resolver_version="0.13.9"):
             commands.append(command)
         if not broker().run(
             "docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+            *owner_options(),
             "--pids-limit=256", "--memory=2g", "--cpus=2", "--entrypoint", "sh",
             "--mount", f"type=bind,src={root},dst=/deps", "--workdir", "/deps",
             f"ghcr.io/astral-sh/uv:{resolver_version}-python3.12-bookworm-slim",
@@ -190,6 +198,7 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
             )
             stage = "Python advisory scan"
             ok = b.run("docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+                       *owner_options(),
                        "--pids-limit=256", "--memory=2g", "--mount", f"type=bind,src={root},dst=/deps",
                        "--workdir", "/deps", "python:3.12-slim", "sh", "-ec", command)
             # Canonical IDs make newly published advisories trigger a fresh alert.
@@ -207,6 +216,7 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
                         findings.add((dependency["name"], dependency["version"], vuln["id"]))
             stage = "npm advisory scan"
             npm_ok = b.run("docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+                          *owner_options(),
                           "--pids-limit=256", "--memory=2g", "--mount", f"type=bind,src={root},dst=/deps",
                           "--workdir", "/deps", "node:22-bookworm-slim", "sh", "-ec",
                           "npm audit --package-lock-only --audit-level=moderate --json > npm-audit.json")
