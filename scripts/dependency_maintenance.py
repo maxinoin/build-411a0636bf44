@@ -163,7 +163,7 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
     context = "broker/daily-dependency-audit"
     previous = b.latest_status(statuses, context)
     today = datetime.now(timezone.utc).date().isoformat()
-    if previous and previous.get("created_at", "").startswith(today):
+    if previous and previous.get("created_at", "").startswith(today) and os.environ.get("RECHECK") != "true":
         return int(previous["state"] == "failure")
     errors = []
     stage = "manifest download"
