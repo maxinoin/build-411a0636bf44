@@ -28,7 +28,7 @@ class MaintenanceTests(unittest.TestCase):
         m.validate_manifest("-r requirements.in\n-c requirements.lock\nuvicorn[standard]>=0.34,<1\nuvloop==0.23 ; sys_platform != 'win32'\n")
 
     def test_manifest_cannot_read_arbitrary_files_or_set_index(self):
-        for value in ("-r /etc/passwd", "-c ../secret", "--index-url https://example.com", "pillow @ https://example.com/p.whl", "./malware", "-e .", "git+https://example.com"):
+        for value in ("-r /etc/passwd", "-c ../secret", "--index-url https://example.com", "pillow @ https://example.com/p.whl", "./malware", "-e .", "git+https://example.com", "pillow --no-binary pillow"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 m.validate_manifest(value)
 

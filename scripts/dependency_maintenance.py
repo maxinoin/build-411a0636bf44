@@ -50,7 +50,7 @@ def validate_manifest(text):
         if line.startswith(("-r ", "-c ")):
             if line[3:].strip() not in (*INPUTS, *LOCKS):
                 raise ValueError("Unexpected dependency include")
-        elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-\[\],<>=!~* ;'\"()+]*", line):
+        elif "--" in line or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-\[\],<>=!~* ;'\"()+]*", line):
             raise ValueError("Unsafe dependency requirement")
 
 
