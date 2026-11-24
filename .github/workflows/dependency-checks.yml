@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Test trusted maintenance code
+        run: python3 -m unittest discover -s tests -v
       - name: Send Discord webhook test
         if: inputs.test_webhook == true
         env:
@@ -37,8 +39,9 @@ jobs:
         if: inputs.test_webhook != true
         env:
           SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
-          STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN }}
+          READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.DEPENDENCY_UPDATE_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN || secrets.DEPENDENCY_UPDATE_TOKEN }}
+          UPDATE_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

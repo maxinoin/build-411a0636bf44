@@ -22,21 +22,26 @@ COPILOT_REVIEWER = "copilot-pull-request-reviewer[bot]"
 MANIFESTS = {
     "package.json", "package-lock.json", "requirements.txt", "requirements.in",
     "requirements-dev.txt", "requirements.lock",
+    "requirements-training.in", "requirements-dev.in", "requirements-training.txt",
+    "requirements-training.lock", "requirements-dev.lock", "requirements-tools.txt",
 }
 IMAGE_FILE = """\
 FROM node:22-bookworm-slim AS node
 FROM python:3.12-slim-bookworm
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \\
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 libgomp1 \\
     && rm -rf /var/lib/apt/lists/* \\
     && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 WORKDIR /deps
 COPY package*.json requirements* ./
-RUN python -m pip install --only-binary=:all: -r requirements-dev.txt \\
+RUN python -m venv /runtime && /runtime/bin/pip install --only-binary=:all: -r requirements.txt \\
+    && /runtime/bin/pip check \\
+    && if [ -f requirements-training.txt ]; then python -m venv /training && /training/bin/pip install --only-binary=:all: -r requirements-training.txt && /training/bin/pip check; fi \\
+    && python -m pip install --only-binary=:all: -r requirements-dev.txt \\
     && python -m pip check \\
     && python -m venv /audit \\
-    && /audit/bin/pip install --only-binary=:all: pip-audit \\
+    && /audit/bin/pip install --only-binary=:all: pip-audit==2.9.0 uv==0.13.9 \\
     && npm ci --ignore-scripts
 """
 
@@ -90,7 +95,8 @@ def check(repository, reader, sha):
         context = root / "build"
         context.mkdir()
         for name in MANIFESTS:
-            shutil.copyfile(checkout / name, context / name)
+            if (checkout / name).is_file():
+                shutil.copyfile(checkout / name, context / name)
         (context / "Dockerfile").write_text(IMAGE_FILE, encoding="utf-8")
         image = "dependency-check:" + sha
         if not run("docker", "build", "-t", image, str(context)):
@@ -102,20 +108,32 @@ def check(repository, reader, sha):
                 "--security-opt=no-new-privileges", "--pids-limit=256", *args,
             )
 
-        audit_ok = container(
-            image, "sh", "-c",
-            "/audit/bin/pip-audit --disable-pip --no-deps -r requirements.lock; "
-            "python_result=$?; npm audit --audit-level=moderate; "
-            "npm_result=$?; test \"$python_result\" = 0 && test \"$npm_result\" = 0",
-        )
+        locks = [name for name in ("requirements.lock", "requirements-training.lock", "requirements-dev.lock", "requirements-tools.txt")
+                 if (context / name).is_file()]
+        audit_command = "result=0; " + "; ".join(
+            "/audit/bin/pip-audit --disable-pip --no-deps -r " + name + " || result=1"
+            for name in locks
+        ) + "; npm audit --audit-level=moderate || result=1; exit $result"
+        audit_ok = container(image, "sh", "-c", audit_command)
+        runtime_ok = True
+        if (checkout / "scripts/check_dependency_environment.py").is_file():
+            runtime_ok = container(
+                "--network=none", "--mount", f"type=bind,src={checkout},dst=/source,readonly",
+                "--env", "MODEL_TRAINING_ENABLED=0", image, "sh", "-ec",
+                "cd /source; /runtime/bin/python scripts/check_dependency_environment.py --group runtime; "
+                "/training/bin/python scripts/check_dependency_environment.py --group training",
+            )
         tests_ok = container(
             "--network=none", "--mount", f"type=bind,src={checkout},dst=/source,readonly",
             "--env", "MODEL_TRAINING_ENABLED=0", image, "sh", "-ec",
             "cp -r /source /tmp/app; cd /tmp/app; ln -s /deps/node_modules node_modules; "
             "python scripts/export_contracts.py --check; "
             "python -m pytest -q tests/test_geometry.py tests/test_pwa.py tests/test_transloc.py; "
+            "if [ -f tests/test_dependency_groups.py ]; then python -m pytest -q tests/test_dependency_groups.py; fi; "
             "npm test",
         )
+        if not runtime_ok:
+            return "Runtime or analysis environment checks failed"
         if not audit_ok and not tests_ok:
             return "Dependency audit and smoke checks failed"
         if not audit_ok:
@@ -218,7 +236,7 @@ def discord_alert(
     else:
         message = (
             f"✅ KnightRoute dependency PR #{number}: broker checks passed for "
-            f"`{sha[:7]}`; Copilot review is `{review_state}`. Please review and "
+            f"`{sha[:7]}`; Copilot review is `{review_state or 'pending'}`. Please review and "
             f"decide whether to merge; nothing was merged: <{url}>"
         )
         description = "Discord alert sent: checks and Copilot review complete"
@@ -249,6 +267,8 @@ def main():
 
     checked = 0
     failures = 0
+    from dependency_maintenance import daily_audit, refresh_locks
+    daily_failures = daily_audit(repository, reader, reporter, webhook, discord_user_id)
     notifications = 0
     notification_errors = 0
     for page in range(1, 11):
@@ -259,6 +279,17 @@ def main():
             if not eligible(pr, repository):
                 continue
             number = int(pr["number"])
+            try:
+                pr = refresh_locks(repository, reader, pr, MANIFESTS)
+            except Exception:
+                sha = pr["head"]["sha"]
+                report(sha, "failure", "Automatic lock refresh failed; review required")
+                previous = json.loads(api(repository, reporter, f"commits/{sha}/statuses"))
+                if webhook and latest_status(previous, FAILURE_NOTIFIED_CONTEXT) is None:
+                    discord_alert(webhook, repository, number, sha, "failure", discord_user_id=discord_user_id)
+                    notify(sha, FAILURE_NOTIFIED_CONTEXT, "Discord alert sent: lock refresh failed")
+                failures += 1
+                continue
             sha = pr["head"]["sha"]
             if not re.fullmatch(r"[0-9a-f]{40}", sha):
                 continue
@@ -275,7 +306,7 @@ def main():
                 ):
                     continue
                 if not names or len(files) >= 100 or not names <= MANIFESTS or any(
-                    change["status"] != "modified" for change in files
+                    change["status"] not in {"modified", "added", "removed"} for change in files
                 ):
                     continue
                 report(sha, "pending", "Running dependency audit and app smoke checks")
@@ -293,10 +324,16 @@ def main():
 
             if not webhook or check_status is None or check_status.get("state") not in {"success", "failure"}:
                 continue
+            review = None
+            if check_status["state"] == "success":
+                try:
+                    review = current_copilot_review(repository, reader, number, sha)
+                except HTTPError:
+                    pass  # Review lookup must not suppress the check-result alert.
             notification_context = (
                 FAILURE_NOTIFIED_CONTEXT
                 if check_status["state"] == "failure"
-                else REVIEW_NOTIFIED_CONTEXT
+                else REVIEW_NOTIFIED_CONTEXT if review else "broker/discord-checks-alert"
             )
             notified = latest_status(previous, notification_context)
             if notified and notified.get("state") == "success":
@@ -310,11 +347,7 @@ def main():
                 or not eligible(current, repository)
             ):
                 continue
-            review = None
             if check_status["state"] == "success":
-                review = current_copilot_review(repository, reader, number, sha)
-                if review is None:
-                    continue
                 current = json.loads(api(repository, reader, f"pulls/{number}"))
                 if (
                     current.get("state") != "open"
@@ -344,7 +377,7 @@ def main():
             f"Checked {checked} eligible updates; check failures {failures}; "
             "Discord alert skipped because DISCORD_WEBHOOK_URL is not configured."
         )
-    return int(bool(failures or notification_errors))
+    return int(bool(failures or notification_errors or daily_failures))
 
 
 if __name__ == "__main__":
