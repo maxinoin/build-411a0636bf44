@@ -37,6 +37,7 @@ WORKDIR /deps
 COPY package*.json requirements* ./
 RUN python -m venv /runtime && /runtime/bin/pip install --only-binary=:all: -r requirements.txt \\
     && /runtime/bin/pip check \\
+    && if [ -f requirements-training.txt ]; then python -m venv /training && /training/bin/pip install --only-binary=:all: -r requirements-training.txt && /training/bin/pip check; fi \\
     && python -m pip install --only-binary=:all: -r requirements-dev.txt \\
     && python -m pip check \\
     && python -m venv /audit \\
@@ -120,7 +121,7 @@ def check(repository, reader, sha):
                 "--network=none", "--mount", f"type=bind,src={checkout},dst=/source,readonly",
                 "--env", "MODEL_TRAINING_ENABLED=0", image, "sh", "-ec",
                 "cd /source; /runtime/bin/python scripts/check_dependency_environment.py --group runtime; "
-                "python scripts/check_dependency_environment.py --group training",
+                "/training/bin/python scripts/check_dependency_environment.py --group training",
             )
         tests_ok = container(
             "--network=none", "--mount", f"type=bind,src={checkout},dst=/source,readonly",
@@ -128,6 +129,7 @@ def check(repository, reader, sha):
             "cp -r /source /tmp/app; cd /tmp/app; ln -s /deps/node_modules node_modules; "
             "python scripts/export_contracts.py --check; "
             "python -m pytest -q tests/test_geometry.py tests/test_pwa.py tests/test_transloc.py; "
+            "if [ -f tests/test_dependency_groups.py ]; then python -m pytest -q tests/test_dependency_groups.py; fi; "
             "npm test",
         )
         if not runtime_ok:
