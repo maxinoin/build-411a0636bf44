@@ -269,6 +269,9 @@ def main():
     failures = 0
     from dependency_maintenance import daily_audit, refresh_locks
     daily_failures = daily_audit(repository, reader, reporter, webhook, discord_user_id)
+    if os.environ.get("AUDIT_ONLY") == "true":
+        print("Daily audit finished; findings or incomplete scans: " + str(daily_failures))
+        return daily_failures
     notifications = 0
     notification_errors = 0
     for page in range(1, 11):

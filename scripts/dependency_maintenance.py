@@ -163,9 +163,10 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
     context = "broker/daily-dependency-audit"
     previous = b.latest_status(statuses, context)
     today = datetime.now(timezone.utc).date().isoformat()
-    if previous and previous.get("created_at", "").startswith(today):
+    if previous and previous.get("created_at", "").startswith(today) and os.environ.get("RECHECK") != "true":
         return int(previous["state"] == "failure")
     errors = []
+    stage = "manifest download"
     try:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -187,12 +188,16 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
                 "/tmp/audit/bin/pip-audit --disable-pip --no-deps -f json -r \"$file\" > \"$file.audit.json\" || result=1; "
                 "done; exit $result"
             )
+            stage = "Python advisory scan"
             ok = b.run("docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                        "--pids-limit=256", "--memory=2g", "--mount", f"type=bind,src={root},dst=/deps",
                        "--workdir", "/deps", "python:3.12-slim", "sh", "-ec", command)
             # Canonical IDs make newly published advisories trigger a fresh alert.
             findings = set()
             reports = list(root.glob("*.audit.json"))
+            if not reports:
+                raise RuntimeError("Missing scanner reports")
+            stage = "Python report parsing"
             for report in reports:
                 data = json.loads(report.read_text(encoding="utf-8"))
                 for dependency in data["dependencies"]:
@@ -200,17 +205,21 @@ def daily_audit(repository, reader, reporter, webhook, discord_user_id):
                         errors.append("A dependency could not be audited")
                     for vuln in dependency.get("vulns", []):
                         findings.add((dependency["name"], dependency["version"], vuln["id"]))
+            stage = "npm advisory scan"
             npm_ok = b.run("docker", "run", "--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                           "--pids-limit=256", "--memory=2g", "--mount", f"type=bind,src={root},dst=/deps",
                           "--workdir", "/deps", "node:22-bookworm-slim", "sh", "-ec",
                           "npm audit --package-lock-only --audit-level=moderate --json > npm-audit.json")
+            stage = "npm report parsing"
             npm = json.loads((root / "npm-audit.json").read_text(encoding="utf-8"))
             npm_findings = npm.get("vulnerabilities", {})
             if findings or not ok or not npm_ok or not reports:
                 errors.append("Known vulnerabilities or an incomplete audit")
             fingerprint = hashlib.sha256(json.dumps([sorted(findings), npm_findings, errors], sort_keys=True).encode()).hexdigest()[:16]
-    except Exception:
-        errors = ["Daily dependency audit could not finish"]
+    except Exception as error:
+        # Stage labels and exception classes are safe for public statuses;
+        # exception payloads can contain private URLs and must never be logged.
+        errors = [f"Daily audit: {stage} failed ({type(error).__name__})"]
         fingerprint = "audit-unavailable"
     state = "failure" if errors else "success"
     notified_context = "broker/daily-audit-alert-" + fingerprint

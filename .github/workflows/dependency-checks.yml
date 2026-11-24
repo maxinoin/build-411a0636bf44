@@ -5,6 +5,11 @@ on:
     - cron: '23 */3 * * *'
   workflow_dispatch:
     inputs:
+      audit_only:
+        description: Retry the daily advisory scan without rebuilding PR environments
+        required: false
+        default: false
+        type: boolean
       test_webhook:
         description: Send one Discord test message and skip dependency checks
         required: false
@@ -46,4 +51,5 @@ jobs:
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECHECK: ${{ github.event_name == 'workflow_dispatch' }}
+          AUDIT_ONLY: ${{ inputs.audit_only }}
         run: python3 scripts/check-dependency-prs.py
