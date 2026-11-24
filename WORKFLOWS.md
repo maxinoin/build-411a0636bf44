@@ -25,3 +25,33 @@ One dispatch builds an unsigned IPA for a private prerelease. Choose `app_varian
 The private repository's release workflow dispatches Production builds to this broker. It requires a repository Actions secret named `KNIGHTROUTE_IPA_BROKER_TOKEN` with `actions:write` access to this broker repository. That credential is used only by GitHub Actions to start the broker workflow; it is not passed to Xcode or included in either IPA. The private release workflow uses the same dispatch for an on-demand Dev build when run manually.
 
 A failed simulator suite blocks normal IPA delivery. To request a private candidate after a failed full-suite run, explicitly enable `allow_failed_ui_tests_for_private_candidate`. The release title identifies the candidate and the run still reports the test failure. Swift contract failures and missing simulator results block packaging.
+
+
+## Dependency maintenance
+
+The dependency broker supports runtime, training and development locks. It
+resolves related locks inside a credential-free, manifest-only uv container,
+then updates only those locks on authenticated same-repository Dependabot PRs.
+Set DEPENDENCY_UPDATE_TOKEN in this broker's Actions secrets with Contents
+read/write on the private source repository only. If separate read/status
+secrets are absent, also grant Pull requests read and Commit statuses read/write
+to the updater token; the trusted orchestrator uses it for those API calls too.
+Existing separate read/status credentials take precedence. No code calls the merge API.
+Contents write is a repository-wide GitHub permission; trusted code restricts
+writes to generated lockfiles on validated Dependabot branches. Restrict broker
+write access because its maintainers can edit the workflow that uses the token.
+
+Every three hours the broker checks new dependency PR commits; once per UTC day
+it also audits main against current Python/npm advisory databases. Failures and
+new advisories notify the configured Discord user/channel. Missing Copilot
+reviews no longer block a passed-check review reminder. Notifications describe
+AI review as pending where appropriate. Public output remains generic.
+
+Merge this broker update before the private dependency split. It accepts legacy
+branches without the new locks. Lock resolution is limited to registry packages
+and allowlisted requirements includes; private PR scripts are never executed
+with writer credentials. Missing writer permission is reported as a failed lock
+refresh whenever related locks need a commit. Do not reuse release credentials.
+
+Local regression check: `python -m unittest discover -s tests -v`.
+Docker-based integration checks require Docker/WSL and are a separate gate.
