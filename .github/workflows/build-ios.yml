@@ -17,6 +17,12 @@ on:
         type: boolean
         required: false
         default: true
+      sheet_style:
+        description: Route sheet accent treatment for the private IPA
+        type: choice
+        required: false
+        options: [accent-rail-gray-divider, colored-divider-only]
+        default: colored-divider-only
       allow_failed_ui_tests_for_private_candidate:
         description: Allow a labeled private test candidate when the full simulator suite fails
         type: boolean
@@ -31,7 +37,7 @@ permissions:
   contents: none
 
 concurrency:
-  group: ios-${{ github.ref }}-${{ inputs.deliver_private_ipa && 'ipa' || 'tests' }}
+  group: ios-${{ github.ref }}-${{ inputs.deliver_private_ipa && inputs.sheet_style || 'tests' }}
   cancel-in-progress: false
 
 jobs:
@@ -361,6 +367,8 @@ jobs:
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
           SENTRY_ENVIRONMENT: production
+          KNIGHTROUTE_DEVELOPER_PREVIEW: 'YES'
+          KNIGHTROUTE_SHEET_STYLE: ${{ inputs.sheet_style }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
       - name: Upload IPA to a private release
@@ -371,6 +379,7 @@ jobs:
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           SIMULATOR_TEST_RESULT: ${{ needs.full_test_gate.outputs.test_result }}
           ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
+          SHEET_STYLE: ${{ inputs.sheet_style }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
 
       - name: Upload filtered build diagnostics privately

@@ -23,7 +23,13 @@ if [[ "$test_failed" == "true" && "${ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE
 fi
 
 release_tag="ios-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-release_title="Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+sheet_style="${SHEET_STYLE:-colored-divider-only}"
+case "$sheet_style" in
+  accent-rail-gray-divider) style_label="accent rail + gray divider" ;;
+  colored-divider-only) style_label="colored divider only" ;;
+  *) echo "::error title=Private upload failed::Unknown route sheet style."; exit 1 ;;
+esac
+release_title="Unsigned iOS build ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} — ${style_label}"
 if [[ "$test_failed" == "true" ]]; then
   release_title="${release_title} — TESTS FAILED CANDIDATE"
 fi
@@ -33,7 +39,7 @@ if ! gh release create "$release_tag" \
   --target "$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)" \
   --latest=false \
   --title "$release_title" \
-  --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Simulator UI tests for this revision: ${test_result}." \
+  --notes "Unsigned iPhone IPA built from the selected private revision by the public build broker. Route sheet style: ${style_label}. Developer simulated-bus controls: enabled. Simulator UI tests for this revision: ${test_result}." \
   --prerelease >"$RUNNER_TEMP/private-release-upload.log" 2>&1; then
   echo "::error title=Private upload failed::The IPA could not be uploaded to a private release; response details were suppressed."
   exit 1
