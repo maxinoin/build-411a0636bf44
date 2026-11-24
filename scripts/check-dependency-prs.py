@@ -163,7 +163,7 @@ def current_copilot_review(repository, reader, number, sha):
     )
 
 
-def post_discord(webhook, message):
+def post_discord(webhook, message, discord_user_id=None):
     parsed = urlsplit(webhook)
     if (
         parsed.scheme != "https"
@@ -176,9 +176,15 @@ def post_discord(webhook, message):
         or not re.fullmatch(r"/api/webhooks/[0-9]+/[A-Za-z0-9._-]+/?", parsed.path)
     ):
         raise ValueError("Discord webhook URL is invalid")
+    allowed_mentions = {"parse": []}
+    if discord_user_id:
+        if not re.fullmatch(r"[0-9]{17,20}", discord_user_id):
+            raise ValueError("Discord user ID is invalid")
+        message = f"<@{discord_user_id}> {message}"
+        allowed_mentions["users"] = [discord_user_id]
     payload = json.dumps({
         "content": message,
-        "allowed_mentions": {"parse": []},
+        "allowed_mentions": allowed_mentions,
     }).encode()
     request = Request(
         webhook, data=payload,
@@ -189,15 +195,19 @@ def post_discord(webhook, message):
             raise RuntimeError("Discord webhook returned an unexpected status")
 
 
-def discord_test(webhook):
+def discord_test(webhook, discord_user_id=None):
     post_discord(
         webhook,
         "✅ KnightRoute webhook test: delivery is working. This was a test; "
         "no dependency checks or PR changes were run.",
+        discord_user_id,
     )
 
 
-def discord_alert(webhook, repository, number, sha, check_state, review_state=None):
+def discord_alert(
+    webhook, repository, number, sha, check_state, review_state=None,
+    discord_user_id=None,
+):
     url = f"https://github.com/{repository}/pull/{number}"
     if check_state == "failure":
         message = (
@@ -212,7 +222,7 @@ def discord_alert(webhook, repository, number, sha, check_state, review_state=No
             f"decide whether to merge; nothing was merged: <{url}>"
         )
         description = "Discord alert sent: checks and Copilot review complete"
-    post_discord(webhook, message)
+    post_discord(webhook, message, discord_user_id)
     return description
 
 
@@ -221,6 +231,7 @@ def main():
     reader = os.environ["READ_TOKEN"]
     reporter = os.environ["STATUS_TOKEN"]
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+    discord_user_id = os.environ.get("DISCORD_USER_ID", "").strip() or None
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository) or not reader or not reporter:
         raise RuntimeError("Broker credentials are missing")
 
@@ -315,6 +326,7 @@ def main():
                 description = discord_alert(
                     webhook, repository, number, sha, check_status["state"],
                     review.get("state") if review else None,
+                    discord_user_id,
                 )
                 notify(sha, notification_context, description)
                 notifications += 1
@@ -339,9 +351,10 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--test-discord"]:
             webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
+            discord_user_id = os.environ.get("DISCORD_USER_ID", "").strip() or None
             if not webhook:
                 raise RuntimeError("Discord webhook is not configured")
-            discord_test(webhook)
+            discord_test(webhook, discord_user_id)
             print("Discord webhook test delivered.")
             raise SystemExit(0)
         raise SystemExit(main())

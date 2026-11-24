@@ -31,6 +31,7 @@ jobs:
         if: inputs.test_webhook == true
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
         run: python3 scripts/check-dependency-prs.py --test-discord
       - name: Check eligible dependency updates
         if: inputs.test_webhook != true
@@ -39,6 +40,7 @@ jobs:
           READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
           STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECHECK: ${{ github.event_name == 'workflow_dispatch' }}
         run: python3 scripts/check-dependency-prs.py
