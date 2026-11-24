@@ -39,8 +39,8 @@ jobs:
         if: inputs.test_webhook != true
         env:
           SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
-          READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
-          STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN }}
+          READ_TOKEN: ${{ secrets.DEPENDENCY_READ_TOKEN || secrets.DEPENDENCY_UPDATE_TOKEN || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          STATUS_TOKEN: ${{ secrets.DEPENDENCY_STATUS_TOKEN || secrets.DEPENDENCY_UPDATE_TOKEN }}
           UPDATE_TOKEN: ${{ secrets.DEPENDENCY_UPDATE_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}

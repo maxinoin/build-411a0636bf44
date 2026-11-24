@@ -29,8 +29,10 @@ The dependency broker supports runtime, training and development locks. It
 resolves related locks inside a credential-free, manifest-only uv container,
 then updates only those locks on authenticated same-repository Dependabot PRs.
 Set DEPENDENCY_UPDATE_TOKEN in this broker's Actions secrets with Contents
-read/write on the private source repository only. The existing read/status
-credentials retain their separate roles. No code calls the merge API.
+read/write on the private source repository only. If separate read/status
+secrets are absent, also grant Pull requests read and Commit statuses read/write
+to the updater token; the trusted orchestrator uses it for those API calls too.
+Existing separate read/status credentials take precedence. No code calls the merge API.
 Contents write is a repository-wide GitHub permission; trusted code restricts
 writes to generated lockfiles on validated Dependabot branches. Restrict broker
 write access because its maintainers can edit the workflow that uses the token.
