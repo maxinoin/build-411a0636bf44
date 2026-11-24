@@ -3,7 +3,30 @@ set -Eeuo pipefail
 source_dir="$GITHUB_WORKSPACE/private-source/$IOS_PROJECT_DIRECTORY"
 derived_data="$RUNNER_TEMP/ios-derived"
 source_revision="$(git -C "$GITHUB_WORKSPACE/private-source" rev-parse HEAD)"
-sentry_release="$(printf '%s' "$IOS_SCHEME" | tr '[:upper:]' '[:lower:]')-ios@$source_revision"
+app_variant="${APP_VARIANT:-dev}"
+case "$app_variant" in
+  dev)
+    build_flavor="dev"
+    bundle_identifier="com.knighteta.app.dev"
+    display_name="KnightRoute Dev"
+    default_scenario="multiple"
+    developer_preview="YES"
+    api_base_url="http://localhost:8000"
+    ;;
+  production)
+    build_flavor="production"
+    bundle_identifier="com.knighteta.app"
+    display_name="KnightRoute"
+    default_scenario="live"
+    developer_preview="NO"
+    api_base_url="https://129-158-208-229.sslip.io"
+    ;;
+  *)
+    echo "::error title=Build configuration invalid::Choose app_variant dev or production."
+    exit 1
+    ;;
+esac
+sentry_release="$(printf '%s' "$IOS_SCHEME-$app_variant" | tr '[:upper:]' '[:lower:]')-ios@$source_revision"
 
 set +e
 xcodebuild -quiet \
@@ -19,7 +42,12 @@ xcodebuild -quiet \
   SENTRY_DSN="${SENTRY_IOS_DSN:-}" \
   SENTRY_RELEASE="$sentry_release" \
   SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
-  KNIGHTROUTE_DEVELOPER_PREVIEW="${KNIGHTROUTE_DEVELOPER_PREVIEW:-NO}" \
+  KNIGHTROUTE_BUILD_FLAVOR="$build_flavor" \
+  KNIGHTROUTE_DEVELOPER_PREVIEW="$developer_preview" \
+  KNIGHTROUTE_DEFAULT_BUS_SCENARIO="$default_scenario" \
+  KNIGHTROUTE_DISPLAY_NAME="$display_name" \
+  KNIGHTROUTE_API_BASE_URL="$api_base_url" \
+  PRODUCT_BUNDLE_IDENTIFIER="$bundle_identifier" \
   KNIGHTROUTE_SHEET_STYLE="${KNIGHTROUTE_SHEET_STYLE:-colored-divider-only}" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \

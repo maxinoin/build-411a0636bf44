@@ -7,6 +7,16 @@ on:
         description: Exact commit to build from the configured private repository (defaults to codex/ipa-queue)
         type: string
         required: false
+      app_variant:
+        description: Dev uses local sample data and simulation controls; Production uses live data with simulation controls disabled.
+        type: choice
+        required: false
+        options: [dev, production]
+        default: dev
+      production_release_tag:
+        description: Published non-prerelease source tag required for Production builds
+        type: string
+        required: false
       run_ui_tests:
         description: Run the full simulator suite before IPA delivery. Set false to build a private IPA for manual device testing without running tests.
         type: boolean
@@ -37,12 +47,12 @@ permissions:
   contents: none
 
 concurrency:
-  group: ios-${{ github.ref }}-${{ inputs.deliver_private_ipa && inputs.sheet_style || 'tests' }}
+  group: ios-${{ github.ref }}-${{ inputs.app_variant || 'dev' }}-${{ inputs.deliver_private_ipa && inputs.sheet_style || 'tests' }}
   cancel-in-progress: false
 
 jobs:
   resolve_queue:
-    name: Check for a new queued IPA revision
+    name: Resolve source revision for the IPA
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
@@ -86,6 +96,8 @@ jobs:
           REQUESTED_REVISION: ${{ inputs.private_source_sha }}
           PRIVATE_SOURCE_REPOSITORY: ${{ secrets.PRIVATE_SOURCE_REPOSITORY }}
           PRIVATE_SOURCE_READ_TOKEN: ${{ steps.auth.outputs.auth_mode == 'app' && steps.source_app_token.outputs.token || secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          APP_VARIANT: ${{ inputs.app_variant || 'dev' }}
+          PRODUCTION_RELEASE_TAG: ${{ inputs.production_release_tag }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/resolve-queued-revision-for-this-manual-build.sh"
 
   full_test_map:
@@ -366,8 +378,8 @@ jobs:
         shell: bash
         env:
           SENTRY_IOS_DSN: ${{ secrets.SENTRY_IOS_DSN }}
-          SENTRY_ENVIRONMENT: production
-          KNIGHTROUTE_DEVELOPER_PREVIEW: 'YES'
+          SENTRY_ENVIRONMENT: ${{ inputs.app_variant == 'production' && 'production' || 'development' }}
+          APP_VARIANT: ${{ inputs.app_variant || 'dev' }}
           KNIGHTROUTE_SHEET_STYLE: ${{ inputs.sheet_style }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/build-and-package-unsigned-arm64-ipa.sh"
 
@@ -380,6 +392,7 @@ jobs:
           SIMULATOR_TEST_RESULT: ${{ needs.full_test_gate.outputs.test_result }}
           ALLOW_FAILED_UI_TESTS_FOR_PRIVATE_CANDIDATE: ${{ inputs.allow_failed_ui_tests_for_private_candidate }}
           SHEET_STYLE: ${{ inputs.sheet_style }}
+          APP_VARIANT: ${{ inputs.app_variant || 'dev' }}
         run: bash "$RUNNER_TEMP/broker/scripts/ios/upload-ipa-to-a-private-release.sh"
 
       - name: Upload filtered build diagnostics privately
