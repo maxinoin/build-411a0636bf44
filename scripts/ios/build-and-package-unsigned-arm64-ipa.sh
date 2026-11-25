@@ -27,6 +27,13 @@ case "$app_variant" in
     ;;
 esac
 sentry_release="$(printf '%s' "$IOS_SCHEME-$app_variant" | tr '[:upper:]' '[:lower:]')-ios@$source_revision"
+build_number_base=2026112401
+if [[ ! "${GITHUB_RUN_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  echo "::error title=iOS build version unavailable::The workflow run number is missing."
+  exit 1
+fi
+build_number=$((build_number_base + GITHUB_RUN_NUMBER))
+echo "Building ${app_variant} IPA with build number ${build_number}."
 
 set +e
 xcodebuild -quiet \
@@ -48,6 +55,7 @@ xcodebuild -quiet \
   KNIGHTROUTE_DISPLAY_NAME="$display_name" \
   KNIGHTROUTE_API_BASE_URL="$api_base_url" \
   PRODUCT_BUNDLE_IDENTIFIER="$bundle_identifier" \
+  CURRENT_PROJECT_VERSION="$build_number" \
   KNIGHTROUTE_SHEET_STYLE="${KNIGHTROUTE_SHEET_STYLE:-colored-divider-only}" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
